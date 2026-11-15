@@ -2126,3 +2126,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .pj-edge { position: absolute; left: -1px; top: -1px; bottom: -1px; width: 5px; border-radius: 7px 0 0 7px; pointer-events: none; }
 .pj-card.has-edge { padding-left: 14px; }
 @media (hover: none) { .pj-card.has-edge { padding-left: 28px; } }
+
+/* 📝 memo notes: one small icon per day in the month view */
+.calendar-memo { float: right; font-size: 12px; line-height: 1; opacity: .9; margin-left: 2px; }
+@media (max-width: 760px) { .calendar-memo { font-size: 9px; } }

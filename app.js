@@ -1451,6 +1451,7 @@ RemminStore.ready.then(() => {
         if (empty) {
             updatePrivateBtn(null);
             updateCalendarOnlyBtn(null);
+            updateMemoBtn(null);
             $('noteTitle').value = '';
             editorEl.innerHTML = '';
             $('noteFolder').innerHTML = folderOptions('');
@@ -1465,6 +1466,7 @@ RemminStore.ready.then(() => {
         $('noteTitle').value = note.title;
         updatePrivateBtn(note);
         updateCalendarOnlyBtn(note);
+        updateMemoBtn(note);
         stopVoicePlayback();
         editorEl.innerHTML = sanitizeHtml(note.html);   // (also turns web addresses into links)
         resetTextHistory();
@@ -1606,11 +1608,42 @@ RemminStore.ready.then(() => {
         if (!note.calendarOnly) delete note.calendarOnly;
         touch(note);
         updateCalendarOnlyBtn(note);
+        updateMemoBtn(note);
         renderTree();
         if (note.calendarOnly) {
             toast(note.scheduledAt ? 'Hidden in Explorer: open this note from the Calendar'
                 : 'Hidden in Explorer. Give it a date, or you can only find it in the Calendar if it has one');
         } else toast('This note is shown in the Explorer again');
+    });
+
+    /* ---- 📝 Collapse in Calendar: a small memo note (e.g. "pick up the kids") ----
+     * In the month view a day only shows one small 📝 for all its memos; click the day to see them.
+     * Memo notes always start their title with 📝. */
+    const MEMO = '📝';
+    const memoTitle = (title) => `${MEMO} ${title.replace(/^📝\s*/u, '').trim()}`.trim();
+    function updateMemoBtn(note) {
+        const btn = $('memoBtn');
+        btn.disabled = !note;
+        const on = !!(note && note.memo);
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.title = on ? 'MEMO (collapsed in calendar). Click to make it a normal note again.'
+            : 'Make MEMO (collapse note in calendar)';
+        btn.setAttribute('aria-label', btn.title);
+    }
+    $('memoBtn').addEventListener('click', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note || isPrivateLocked(note)) return;
+        flushEditor();
+        note.memo = !note.memo;
+        if (note.memo) note.title = memoTitle(note.title);
+        else { delete note.memo; note.title = note.title.replace(/^📝\s*/u, ''); }
+        $('noteTitle').value = note.title;
+        touch(note);
+        updateMemoBtn(note);
+        renderTree();
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+        toast(note.memo ? 'Collapsed in Calendar: shown as a small 📝' : 'Shown normally in the Calendar again');
     });
 
     function updatePrivateBtn(note) {
@@ -1637,6 +1670,7 @@ RemminStore.ready.then(() => {
         touch(note);
         updatePrivateBtn(note);
         updateCalendarOnlyBtn(note);
+        updateMemoBtn(note);
         renderTree();
         toast(note.private ? 'Private: this note now asks for your pass when opened' : 'This note is no longer private');
     });
@@ -1674,7 +1708,8 @@ RemminStore.ready.then(() => {
         clearTimeout(editorTimer);
         const note = noteById(state.currentNoteId);
         if (!note || isPrivateLocked(note)) return;
-        const title = $('noteTitle').value;
+        let title = $('noteTitle').value;
+        if (note.memo && !/^📝/u.test(title.trim())) { title = memoTitle(title); $('noteTitle').value = title; } // memos keep their 📝
         let html = note.html;
         let content = note.content;
         if (textDirty) {
@@ -3831,7 +3866,9 @@ RemminStore.ready.then(() => {
         for (let i = 0; i < 42; i++) {
             const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
             const inMonth = day.getMonth() === month;
-            const scheduled = notesOnDay(day);
+            const onDay = notesOnDay(day);
+            const memos = onDay.filter((n) => n.memo);
+            const scheduled = onDay.filter((n) => !n.memo);
             const isToday = sameDay(day, today);
             const isSelected = sameDay(day, state.calendarDay);
 
@@ -3847,7 +3884,9 @@ RemminStore.ready.then(() => {
             ];
             if (holidays.length) cell.classList.add('has-holiday');
             if (items.length > 2) cell.classList.add('has-more'); // phones: dot top-right for "more than 2"
-            cell.innerHTML = `<div class="calendar-day-number">${day.getDate()}</div>` +
+            const memoMark = memos.length
+                ? `<span class="calendar-memo" title="${escapeHtml(memos.map((m) => m.title.trim() || 'Untitled').join('\n'))}">${MEMO}</span>` : '';
+            cell.innerHTML = `<div class="calendar-day-number">${day.getDate()}${memoMark}</div>` +
                 (items.length
                     ? `<div class="calendar-chips">${items.slice(0, 2).join('')}${items.length > 2 ? `<div class="calendar-more">+${items.length - 2} more</div>` : ''}</div>${scheduled.length ? '<div class="calendar-dot"></div>' : ''}`
                     : '');
@@ -3900,7 +3939,7 @@ RemminStore.ready.then(() => {
                         <button class="folder-action-btn note-rename" data-note-id="${n.id}" title="Rename note">Rename</button>
                         <button class="folder-action-btn folder-delete note-delete" data-note-id="${n.id}" title="Delete note">Delete</button>
                     </span>
-                    <div>${escapeHtml(n.title.trim() || 'Untitled')}</div>
+                    <div>${escapeHtml(n.memo ? memoTitle(n.title) : (n.title.trim() || 'Untitled'))}</div>
                     <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' · alarm' : ''}${n.emailEnabled ? ' · email' : ''}${isRecurring(n) ? ' · ' + repeatSummary(n) : ''}</div>
                 </div>`).join('')
             : (holidays.length ? '' : '<div class="calendar-hint">No notes scheduled for this day.</div>'));
@@ -8949,7 +8988,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'darker very dark colours, Draw/Grid colours for departments, very dark green canvas';
+    const PATCH_NOTE = 'new 📝 Make MEMO button: collapse small notes in the calendar';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

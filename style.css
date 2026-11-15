@@ -2123,3 +2123,6 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .pj-assign .pj-done:hover { background: var(--primary); filter: brightness(1.15); }
 .pj-card.editing .pj-done { display: inline-block; }
 .pj-untitled { color: var(--text-dim); font-style: italic; }
+.pj-edge { position: absolute; left: -1px; top: -1px; bottom: -1px; width: 5px; border-radius: 7px 0 0 7px; pointer-events: none; }
+.pj-card.has-edge { padding-left: 14px; }
+@media (hover: none) { .pj-card.has-edge { padding-left: 28px; } }

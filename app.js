@@ -196,13 +196,13 @@ RemminStore.ready.then(() => {
     // [color, name] in display order
     // colours in the order of the light spectrum (red → violet), then magenta / pink, then the greys
     const PALETTE_NAMED = [
-        ['#fca5a5', 'Light red'], ['#e11d1d', 'Bright red'], ['#991b1b', 'Dark red'],
-        ['#fdba74', 'Light orange'], ['#f97316', 'Bright orange'], ['#c2410c', 'Dark orange'],
-        ['#facc15', 'Yellow'],
-        ['#86efac', 'Light green'], ['#22c55e', 'Bright green'], ['#166534', 'Dark green'],
+        ['#fca5a5', 'Light red'], ['#e11d1d', 'Bright red'], ['#991b1b', 'Dark red'], ['#2b0808', 'Very dark red'],
+        ['#fdba74', 'Light orange'], ['#f97316', 'Bright orange'], ['#c2410c', 'Dark orange'], ['#2e1505', 'Very dark orange'],
+        ['#facc15', 'Yellow'], ['#2b2405', 'Very dark yellow'],
+        ['#86efac', 'Light green'], ['#22c55e', 'Bright green'], ['#166534', 'Dark green'], ['#082614', 'Very dark green'],
         ['#14b8a6', 'Turquoise'], ['#22d3ee', 'Cyan'],
-        ['#3b82f6', 'Blue'], ['#1e3a8a', 'Dark blue'], ['#6366f1', 'Blue-purple'],
-        ['#c4b5fd', 'Light purple'], ['#8b5cf6', 'Purple'], ['#d946ef', 'Magenta'], ['#f472b6', 'Pink'],
+        ['#3b82f6', 'Blue'], ['#1e3a8a', 'Dark blue'], ['#08132e', 'Very dark blue'], ['#6366f1', 'Blue-purple'],
+        ['#c4b5fd', 'Light purple'], ['#8b5cf6', 'Purple'], ['#1c0b30', 'Very dark purple'], ['#d946ef', 'Magenta'], ['#f472b6', 'Pink'],
         ['#000000', 'Black'], ['#404040', 'Dark grey'], ['#bfbfbf', 'Light grey'], ['#ffffff', 'White'] // dark grey = 75% black, light grey = 25% black
     ];
     const OLD_BRIGHT_RED = '#ef4444'; // the earlier, paler "Bright red"
@@ -6390,9 +6390,12 @@ RemminStore.ready.then(() => {
     function pjCardHtml(card) {
         const depts = (card.depts || []).map(pjDept).filter(Boolean);
         const people = (card.people || []).map(pjPerson).filter(Boolean);
-        const edge = depts.length ? ` style="border-left: 4px solid ${escapeHtml(depts[0].color)}"` : '';
+        // one coloured stripe per department along the left edge
+        const step = 100 / (depts.length || 1);
+        const edge = depts.length ? `<span class="pj-edge" style="background:linear-gradient(to bottom, ${depts.map((d, i) =>
+            `${escapeHtml(d.color)} ${(i * step).toFixed(2)}% ${((i + 1) * step).toFixed(2)}%`).join(', ')})"></span>` : '';
         return `
-                    <div class="pj-card" data-card="${card.id}"${edge}>
+                    <div class="pj-card${depts.length ? ' has-edge' : ''}" data-card="${card.id}">${edge}
                         <span class="pj-grip" title="Drag to move" aria-hidden="true">⠿</span>
                         <div class="pj-card-text">${card.text ? escapeHtml(card.text) : '<span class="pj-untitled">Untitled</span>'}</div>
                         <div class="pj-card-foot">
@@ -8934,7 +8937,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'Project items save with Enter or Done; clearer department button';
+    const PATCH_NOTE = 'multi-colour department stripes, very dark colours, Draw before Project';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

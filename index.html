@@ -193,7 +193,8 @@
                             <button class="tool-btn active" id="toolPen" title="Pen">✎</button>
                             <button class="tool-btn" id="toolEraser" title="Eraser">⌫</button>
                             <button class="tool-btn" id="toolFill" title="Bucket: click an area to fill it with the current colour">🪣</button>
-                            <button class="tool-btn" id="toolImage" title="Add a picture (or paste one with Ctrl+V)">🖼</button>
+                            <button class="tool-btn" id="toolImage" title="Add a picture or GIF (or paste one with Ctrl+V)">🖼</button>
+                            <button class="tool-btn" id="toolGif" type="button" title="Search GIFs on KLIPY">GIF</button>
                             <input type="file" id="drawImageFile" accept="image/*" multiple hidden>
                             <button class="tool-btn" id="toolUndo" title="Undo">↶</button>
                             <button class="tool-btn" id="toolClear" title="Clear all">✕</button>
@@ -219,7 +220,9 @@
                             <span class="text-colors" id="textColors" title="Text colour"></span>
                             <button class="tool-btn" data-cmd="insertUnorderedList" title="Bullet list (or type “- ” at the start of a line)">&bull; List</button>
                             <button class="tool-btn" data-cmd="insertOrderedList" title="Numbered list (or type “1. ” at the start of a line)">1. List</button>
-                            <button class="tool-btn" id="insertImageBtn" title="Insert image (you can also paste or drag images in)">🖼 Image</button>
+                            <button class="tool-btn" id="insertImageBtn" title="Insert image or GIF (you can also paste or drag images in)">🖼 Image</button>
+                            <button class="tool-btn" id="insertGifBtn" type="button" title="Search GIFs on KLIPY">GIF</button>
+                            <button class="tool-btn" id="insertVideoEmbedBtn" type="button" title="Embed a YouTube / Vimeo video (or paste its link)">▶ Video</button>
                             <input type="file" id="imageFile" accept="image/*" multiple hidden>
                             <button class="tool-btn" id="insertVoiceBtn" title="Record a voice note">🎤 Voice</button>
                             <span class="image-tools" id="imageTools" hidden>
@@ -245,7 +248,9 @@
                             <button class="tool-btn" type="button" data-cb-tool="text" title="Text (T)">T Text</button>
                             <button class="tool-btn" type="button" data-cb-tool="frame" title="Frame (F) – click, or drag to choose its size. Things inside move with it">▭ Frame</button>
                             <button class="tool-btn" type="button" data-cb-tool="arrow" title="Arrow (A) – drag from one thing to another">↗ Arrow</button>
-                            <button class="tool-btn" type="button" id="cbImageBtn" title="Add pictures (you can also paste or drop them on the board)">🖼 Image</button>
+                            <button class="tool-btn" type="button" id="cbImageBtn" title="Add pictures or GIFs (you can also paste or drop them on the board)">🖼 Image</button>
+                            <button class="tool-btn" type="button" id="cbGifBtn" title="Search GIFs on KLIPY">GIF</button>
+                            <button class="tool-btn" type="button" id="cbVideoBtn" title="Embed a YouTube / Vimeo video (or paste its link on the board)">▶ Video</button>
                             <input type="file" id="cbImageFile" accept="image/*" multiple hidden>
                             <span class="text-colors cb-colors" id="cbColors" title="Colour of the selected sticky notes, frames, arrows or texts"></span>
                             <button class="tool-btn heading-btn" type="button" id="cbHeading" title="Heading">Heading</button>

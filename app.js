@@ -1788,6 +1788,9 @@ RemminStore.ready.then(() => {
         const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(v);
         return m ? '#' + [m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, '0')).join('') : '';
     }
+    // embedded videos (YouTube / Vimeo players) and KLIPY GIFs shown from KLIPY
+    const VIDEO_SRC_RE = /^https:\/\/(?:www\.youtube-nocookie\.com\/embed\/[A-Za-z0-9_-]{11}(?:\?start=\d+)?|player\.vimeo\.com\/video\/\d+)$/;
+    const KLIPY_SRC_RE = /^https:\/\/(?:[a-z0-9-]+\.)*klipy\.(?:com|co)\/[^\s"'<>]+$/i;
     const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'TEMPLATE', 'META', 'LINK', 'TITLE', 'svg', 'SVG']);
 
     // "Default colour": the normal (white) text colour of the notes
@@ -1809,6 +1812,12 @@ RemminStore.ready.then(() => {
             [...node.childNodes].forEach((child) => {
                 if (child.nodeType === 3) return;
                 if (child.nodeType !== 1 || DROP_TAGS.has(child.tagName)) { child.remove(); return; }
+                // an embedded YouTube / Vimeo video (only these two players are allowed)
+                if (child.tagName === 'DIV' && child.hasAttribute('data-video')) {
+                    const src = child.getAttribute('data-video') || '';
+                    if (VIDEO_SRC_RE.test(src)) child.replaceWith(videoBlock(doc, src)); else child.remove();
+                    return;
+                }
                 clean(child);
                 if (!RICH_TAGS.has(child.tagName)) { child.replaceWith(...child.childNodes); return; }
                 if (child.tagName === 'SPAN' && child.hasAttribute('data-voice')) {
@@ -1854,12 +1863,12 @@ RemminStore.ready.then(() => {
                 }
                 [...child.attributes].forEach((attr) => {
                     const keep = child.tagName === 'IMG' && (attr.name === 'style' || attr.name === 'alt' ||
-                        (attr.name === 'src' && /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(attr.value)));
+                        (attr.name === 'src' && (/^data:image\/(png|jpe?g|gif|webp);base64,/i.test(attr.value) || KLIPY_SRC_RE.test(attr.value))));
                     if (!keep) child.removeAttribute(attr.name);
                 });
                 if (child.tagName === 'IMG') {
                     if (!child.getAttribute('src')) { child.remove(); return; }
-                    const m = /width:\s*(\d{1,3})%/.exec(child.getAttribute('style') || '');
+                    const m = /width:\s*(\d{1,3}(?:\.\d+)?)%/.exec(child.getAttribute('style') || '');
                     if (m) child.setAttribute('style', `width:${Math.min(100, Number(m[1]))}%`);
                     else child.removeAttribute('style');
                 }
@@ -2212,7 +2221,7 @@ RemminStore.ready.then(() => {
             reader.onerror = () => reject(reader.error);
             reader.onload = () => {
                 const original = reader.result;
-                if (file.type === 'image/gif' && file.size < 1.5e6) { resolve(original); return; } // keep animation
+                if (file.type === 'image/gif' && file.size < 8e6) { resolve(original); return; } // keep the animation
                 const img = new Image();
                 img.onerror = () => reject(new Error('not an image'));
                 img.onload = () => {
@@ -2479,6 +2488,10 @@ RemminStore.ready.then(() => {
         if (!dt) return;
         // in Draw / Grid the text is hidden (but may still have the focus): leave the paste to them
         if (state.prefs.mode !== 'text') return;
+        // a YouTube / Vimeo link on its own: embed the video
+        const pastedText = dt.getData('text/plain');
+        const pastedVideo = !dt.files.length && pastedText && !/\s/.test(pastedText.trim()) && videoEmbedUrl(pastedText);
+        if (pastedVideo) { e.preventDefault(); insertVideoInText(pastedVideo); return; }
         const files = [...dt.files].filter((f) => f.type.startsWith('image/'));
         const audio = [...dt.files].filter((f) => f.type.startsWith('audio/'));
         if (files.length || audio.length) {
@@ -2591,6 +2604,15 @@ RemminStore.ready.then(() => {
             if (SAFE_LINK_RE.test(link.getAttribute('href'))) window.open(link.getAttribute('href'), '_blank', 'noopener');
             return;
         }
+        const video = e.target.closest('.video-embed');
+        if (video && editorEl.contains(video)) {
+            const src = video.getAttribute('data-video');
+            showMenu(video, 'Video', [
+                { label: 'Open on the website', icon: '↗', run: () => window.open(videoWatchUrl(src), '_blank', 'noopener') },
+                { label: 'Remove video', icon: '🗑', danger: true, run: () => { recordText(); video.remove(); markTextChanged(); } }
+            ]);
+            return;
+        }
         const img = e.target.closest('img');
         if (e.shiftKey && img && editorEl.contains(img)) { e.preventDefault(); selectImage(img, true); return; }
         if (e.shiftKey && !img && selectedImgs.length) return; // Shift + click on text keeps the pictures selected
@@ -2655,6 +2677,14 @@ RemminStore.ready.then(() => {
         const box = document.createElement('div');
         box.innerHTML = editorEl.innerHTML;
         box.querySelectorAll('[data-voice]').forEach((v) => { v.replaceWith(document.createTextNode('🎤 [voice note]')); });
+        box.querySelectorAll('[data-video]').forEach((v) => {
+            const url = videoWatchUrl(v.getAttribute('data-video'));
+            const line = document.createElement('div');
+            const a = document.createElement('a');
+            a.href = url; a.textContent = `▶ Video: ${url}`;
+            line.appendChild(a);
+            v.replaceWith(line);
+        });
         box.querySelectorAll('.img-selected, .selected').forEach((n) => n.classList.remove('img-selected', 'selected'));
         return box;
     }
@@ -2878,6 +2908,186 @@ RemminStore.ready.then(() => {
             { label: 'PDF', icon: '📄', run: downloadPdf },
             { label: 'Word (.docx)', icon: '📝', run: downloadWord }
         ]);
+    });
+
+    /* ---------------- videos (YouTube / Vimeo) in Text and Collage ---------------- */
+    function videoEmbedUrl(text) {
+        const url = String(text || '').trim();
+        let m = /^(?:https?:\/\/)?(?:www\.|m\.|music\.)?(?:youtube\.com\/(?:watch\?(?:[^#\s]*&)?v=|shorts\/|embed\/|live\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(\S*)$/i.exec(url);
+        if (m) {
+            const t = /[?&#](?:t|start)=(?:(\d+)h)?(?:(\d+)m)?(\d+)s?/.exec(m[2] || '');
+            const start = t ? (Number(t[1] || 0) * 3600 + Number(t[2] || 0) * 60 + Number(t[3] || 0)) : 0;
+            return `https://www.youtube-nocookie.com/embed/${m[1]}${start ? `?start=${start}` : ''}`;
+        }
+        m = /^(?:https?:\/\/)?(?:www\.|player\.)?vimeo\.com\/(?:video\/)?(\d+)/i.exec(url);
+        if (m) return `https://player.vimeo.com/video/${m[1]}`;
+        return null;
+    }
+    // the normal web address of an embedded video (for "open", PDF / Word)
+    function videoWatchUrl(src) {
+        let m = /youtube-nocookie\.com\/embed\/([A-Za-z0-9_-]{11})(?:\?start=(\d+))?/.exec(src);
+        if (m) return `https://www.youtube.com/watch?v=${m[1]}${m[2] ? `&t=${m[2]}s` : ''}`;
+        m = /player\.vimeo\.com\/video\/(\d+)/.exec(src);
+        return m ? `https://vimeo.com/${m[1]}` : src;
+    }
+    function videoFrameHtml(src) {
+        return `<iframe src="${escapeHtml(src)}" title="Video" loading="lazy" allowfullscreen ` +
+            'allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>';
+    }
+    function videoBlock(doc, src) {
+        const box = doc.createElement('div');
+        box.className = 'video-embed';
+        box.setAttribute('data-video', src);
+        box.setAttribute('contenteditable', 'false');
+        box.innerHTML = videoFrameHtml(src);
+        return box;
+    }
+    async function askVideoUrl() {
+        const url = await askDialog({ title: 'Embed a video', message: 'Paste a YouTube or Vimeo link.', input: '', okLabel: 'Embed' });
+        if (!url) return null;
+        const src = videoEmbedUrl(url);
+        if (!src) toast('That is not a YouTube or Vimeo link');
+        return src;
+    }
+    function insertVideoInText(src, at) {
+        if (!noteById(state.currentNoteId) || !src) return;
+        recordText();
+        const point = at || caretPoint();
+        const block = videoBlock(document, src);
+        placeLine(block, point.inline ? { before: point.line && point.line.nextSibling } : point);
+        markTextChanged();
+    }
+    $('insertVideoEmbedBtn').addEventListener('click', async () => {
+        if (!noteById(state.currentNoteId)) return;
+        const at = caretPoint();
+        const src = await askVideoUrl();
+        if (src) insertVideoInText(src, at);
+    });
+
+    /* ---------------- KLIPY GIFs ----------------
+     * Needs a free KLIPY API key (klipy.com/developers), kept on this device. */
+    const KLIPY_KEY = 'remmin.klipyKey.v1';
+    const KLIPY_USER = 'remmin.klipyUser.v1';
+    let gifPicker = null;
+    function klipyUser() {
+        let id = RemminStore.get(KLIPY_USER);
+        if (!id) { id = uid(); RemminStore.set(KLIPY_USER, id); }
+        return id;
+    }
+    function buildGifPicker() {
+        const el = document.createElement('div');
+        el.className = 'gif-picker-overlay';
+        el.innerHTML = `
+            <div class="gif-picker" role="dialog" aria-label="GIFs from KLIPY">
+                <div class="gif-head">
+                    <input type="search" class="gif-search" placeholder="Search KLIPY GIFs…" autocomplete="off">
+                    <button type="button" class="gif-close" title="Close" aria-label="Close">✕</button>
+                </div>
+                <div class="gif-key" hidden>
+                    <p>To use KLIPY GIFs, you need a free API key. Make one at
+                    <a href="https://klipy.com/developers" target="_blank" rel="noopener noreferrer">klipy.com/developers</a>
+                    and paste it here. It is kept on this device only.</p>
+                    <div class="gif-key-row"><input type="text" class="gif-key-input" placeholder="KLIPY API key" autocomplete="off" spellcheck="false"><button type="button" class="btn btn-primary gif-key-save">Save</button></div>
+                </div>
+                <div class="gif-grid"></div>
+                <div class="gif-foot"><span>Powered by <b>KLIPY</b></span><button type="button" class="gif-more" hidden>More</button><button type="button" class="gif-change-key">API key</button></div>
+            </div>`;
+        document.body.appendChild(el);
+        const q = el.querySelector('.gif-search'), grid = el.querySelector('.gif-grid'), keyBox = el.querySelector('.gif-key');
+        const more = el.querySelector('.gif-more');
+        let page = 1, timer = null, token = 0;
+        const close = () => { el.classList.remove('active'); gifPicker.onPick = null; };
+        const showKey = (on) => { keyBox.hidden = !on; grid.hidden = on; if (on) el.querySelector('.gif-key-input').value = RemminStore.get(KLIPY_KEY) || ''; };
+        async function load(reset) {
+            const key = (RemminStore.get(KLIPY_KEY) || '').trim();
+            if (!key) { showKey(true); return; }
+            showKey(false);
+            if (reset) { page = 1; grid.innerHTML = '<div class="gif-msg">Loading…</div>'; }
+            const my = ++token;
+            const term = q.value.trim();
+            const url = `https://api.klipy.com/api/v1/${encodeURIComponent(key)}/gifs/${term ? 'search' : 'trending'}` +
+                `?page=${page}&per_page=24&customer_id=${encodeURIComponent(klipyUser())}&locale=${encodeURIComponent((navigator.language || 'en').slice(0, 2))}` +
+                (term ? `&q=${encodeURIComponent(term)}` : '');
+            try {
+                const res = await fetch(url);
+                if (my !== token) return;
+                if (res.status === 401 || res.status === 403) { grid.innerHTML = '<div class="gif-msg">KLIPY refused the API key. Check it with "API key" below.</div>'; return; }
+                if (!res.ok) throw new Error(`KLIPY error ${res.status}`);
+                const json = await res.json();
+                const box = (json && json.data) || {};
+                const items = Array.isArray(box.data) ? box.data : [];
+                if (reset) grid.innerHTML = '';
+                items.forEach((it) => {
+                    const f = it.file || {};
+                    const pick = (sizes) => { for (const s of sizes) { const g = f[s] && f[s].gif; if (g && g.url) return g; } return null; };
+                    const thumb = pick(['sm', 'xs', 'md']), full = pick(['md', 'sm', 'hd']);
+                    if (!thumb || !full) return;
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'gif-item';
+                    b.title = it.title || 'GIF';
+                    b.innerHTML = `<img loading="lazy" alt="" src="${escapeHtml(thumb.url)}">`;
+                    b.addEventListener('click', () => { const pickFn = gifPicker.onPick; close(); if (pickFn) pickFn(full.url); });
+                    grid.appendChild(b);
+                });
+                if (reset && !grid.children.length) grid.innerHTML = '<div class="gif-msg">No GIFs found</div>';
+                more.hidden = !box.has_next;
+            } catch (err) {
+                if (my !== token) return;
+                grid.innerHTML = `<div class="gif-msg">Could not reach KLIPY (${escapeHtml(err.message || 'network error')}).</div>`;
+            }
+        }
+        q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => load(true), 350); });
+        q.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+        more.addEventListener('click', () => { page++; load(false); });
+        el.querySelector('.gif-close').addEventListener('click', close);
+        el.addEventListener('pointerdown', (e) => { if (e.target === el) close(); });
+        el.querySelector('.gif-change-key').addEventListener('click', () => showKey(keyBox.hidden));
+        el.querySelector('.gif-key-save').addEventListener('click', () => {
+            const v = el.querySelector('.gif-key-input').value.trim();
+            if (v) RemminStore.set(KLIPY_KEY, v); else RemminStore.remove(KLIPY_KEY);
+            load(true);
+        });
+        el.querySelector('.gif-key-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') el.querySelector('.gif-key-save').click(); });
+        return { el, q, load, onPick: null };
+    }
+    function openGifPicker(onPick) {
+        if (!gifPicker) gifPicker = buildGifPicker();
+        gifPicker.onPick = onPick;
+        gifPicker.el.classList.add('active');
+        gifPicker.q.value = '';
+        gifPicker.load(true);
+        setTimeout(() => gifPicker.q.focus(), 30);
+    }
+    // the GIF itself (kept in the note, so it keeps working offline); null when KLIPY doesn't allow that
+    async function fetchGifFile(url) {
+        try {
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            const blob = await res.blob();
+            if (!blob.type.startsWith('image/')) return null;
+            return new File([blob], 'klipy.gif', { type: blob.type });
+        } catch (err) { return null; }
+    }
+    $('insertGifBtn').addEventListener('click', () => {
+        if (!noteById(state.currentNoteId)) return;
+        const at = caretPoint();
+        openGifPicker(async (url) => {
+            const file = await fetchGifFile(url);
+            if (file) { insertImageFiles([file], at); return; }
+            // could not download it: show it from KLIPY instead
+            recordText();
+            placeLine(pictureLine(url), at.inline ? { before: at.line && at.line.nextSibling } : at);
+            markTextChanged();
+        });
+    });
+    $('toolGif').addEventListener('click', () => {
+        if (!noteById(state.currentNoteId)) return;
+        openGifPicker(async (url) => {
+            const file = await fetchGifFile(url);
+            if (file) addDrawImages([file]);
+            else toast('This GIF could not be downloaded, so it can\'t go in a drawing');
+        });
     });
 
     // Download the selected picture (also possible with right-click → Save image as)
@@ -5629,11 +5839,14 @@ RemminStore.ready.then(() => {
         state.draw.strokes.forEach((item) => drawStroke(item));
         drawSelectionFrame();
         drawPickFrame();
+        animateDrawGifs();
     }
 
     // draws one item; by default on the drawing itself, or on another canvas (g, size W×H, shifted by ox/oy)
     function drawStroke(stroke, g = ctx, W = canvas.width, H = canvas.height, ox = 0, oy = 0) {
         if (stroke.image) {
+            const frame = gifFrame(stroke.image);
+            if (frame) { g.drawImage(frame, ox + stroke.x * W, oy + stroke.y * H, stroke.w * W, stroke.h * H); return; }
             const img = drawImageEl(stroke.image);
             if (img instanceof HTMLCanvasElement || (img.complete && img.naturalWidth)) {
                 g.drawImage(img, ox + stroke.x * W, oy + stroke.y * H, stroke.w * W, stroke.h * H);
@@ -6016,6 +6229,149 @@ RemminStore.ready.then(() => {
         if (unclamped) return { x, y };
         return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
     }
+
+    /* ---------------- animated GIFs in the drawing ----------------
+     * A canvas only shows the first picture of a GIF, so GIFs in Draw are decoded here into
+     * their frames, and the drawing is redrawn while one is on screen. */
+    function decodeGif(bytes) {
+        let p = 0;
+        const u8 = () => bytes[p++];
+        const u16 = () => { const v = bytes[p] | (bytes[p + 1] << 8); p += 2; return v; };
+        if (String.fromCharCode(...bytes.subarray(0, 3)) !== 'GIF') return null;
+        p = 6;
+        const W = u16(), H = u16(), flags = u8();
+        p += 2; // background colour, aspect
+        if (!W || !H || W * H > 4e6) return null;
+        const readTable = (n) => { const t = bytes.subarray(p, p + n * 3); p += n * 3; return t; };
+        const gct = flags & 0x80 ? readTable(1 << ((flags & 7) + 1)) : null;
+        const frames = [];
+        const screen = new Uint8ClampedArray(W * H * 4);
+        let gce = { disposal: 0, delay: 100, trans: -1 };
+        let budget = 160e6; // bytes of frames we are willing to keep
+        const subBlocks = () => {
+            const parts = [];
+            let size = 0, n;
+            while ((n = u8())) { parts.push(bytes.subarray(p, p + n)); size += n; p += n; }
+            const out = new Uint8Array(size);
+            let o = 0;
+            parts.forEach((b) => { out.set(b, o); o += b.length; });
+            return out;
+        };
+        while (p < bytes.length) {
+            const block = u8();
+            if (block === 0x3b) break; // end
+            if (block === 0x21) {
+                const label = u8();
+                if (label === 0xf9) {
+                    u8(); // size 4
+                    const f = u8();
+                    const delay = u16();
+                    const ti = u8();
+                    u8(); // terminator
+                    gce = { disposal: (f >> 2) & 7, delay: Math.max(20, delay * 10 || 100), trans: f & 1 ? ti : -1 };
+                } else subBlocks();
+                continue;
+            }
+            if (block !== 0x2c) break; // unknown: stop here
+            const fx = u16(), fy = u16(), fw = u16(), fh = u16(), ff = u8();
+            const table = ff & 0x80 ? readTable(1 << ((ff & 7) + 1)) : gct;
+            const interlaced = !!(ff & 0x40);
+            const minCode = u8();
+            const data = subBlocks();
+            if (!table) { gce = { disposal: 0, delay: 100, trans: -1 }; continue; }
+            // LZW
+            const pixels = new Uint8Array(fw * fh);
+            const clear = 1 << minCode, eoi = clear + 1;
+            let size = minCode + 1, mask = (1 << size) - 1, next = eoi + 1;
+            const prefix = new Uint16Array(4096), suffix = new Uint8Array(4096), stack = new Uint8Array(4097);
+            for (let i = 0; i < clear; i++) suffix[i] = i;
+            let bits = 0, acc = 0, di = 0, out = 0, prev = -1, first = 0;
+            while (out < pixels.length) {
+                while (bits < size && di < data.length) { acc |= data[di++] << bits; bits += 8; }
+                if (bits < size) break;
+                let code = acc & mask;
+                acc >>>= size; bits -= size;
+                if (code === clear) { size = minCode + 1; mask = (1 << size) - 1; next = eoi + 1; prev = -1; continue; }
+                if (code === eoi) break;
+                let sp = 0, c = code;
+                if (prev === -1) { pixels[out++] = suffix[code]; prev = code; first = code; continue; }
+                if (code >= next) { stack[sp++] = first; c = prev; }
+                while (c >= clear) { stack[sp++] = suffix[c]; c = prefix[c]; }
+                first = suffix[c];
+                stack[sp++] = first;
+                while (sp && out < pixels.length) pixels[out++] = stack[--sp];
+                if (next < 4096) {
+                    prefix[next] = prev; suffix[next] = first; next++;
+                    if (next > mask && size < 12) { size++; mask = (1 << size) - 1; }
+                }
+                prev = code;
+            }
+            // put the frame on the screen
+            const before = gce.disposal === 3 ? screen.slice() : null;
+            const rowOf = (r) => {
+                if (!interlaced) return r;
+                const passes = [[0, 8], [4, 8], [2, 4], [1, 2]];
+                let n = r;
+                for (const [start, step] of passes) {
+                    const count = Math.ceil((fh - start) / step);
+                    if (n < count) return start + n * step;
+                    n -= count;
+                }
+                return r;
+            };
+            for (let r = 0; r < fh; r++) {
+                const y = fy + rowOf(r);
+                if (y >= H) continue;
+                for (let x = 0; x < fw; x++) {
+                    const idx = pixels[r * fw + x];
+                    if (idx === gce.trans || fx + x >= W) continue;
+                    const o = (y * W + fx + x) * 4, t = idx * 3;
+                    screen[o] = table[t]; screen[o + 1] = table[t + 1]; screen[o + 2] = table[t + 2]; screen[o + 3] = 255;
+                }
+            }
+            const c = document.createElement('canvas');
+            c.width = W; c.height = H;
+            c.getContext('2d').putImageData(new ImageData(screen.slice(), W, H), 0, 0);
+            frames.push({ canvas: c, delay: gce.delay });
+            budget -= W * H * 4;
+            if (budget < 0 || frames.length >= 400) break;
+            if (gce.disposal === 2) {
+                for (let r = fy; r < Math.min(H, fy + fh); r++) screen.fill(0, (r * W + fx) * 4, (r * W + Math.min(W, fx + fw)) * 4);
+            } else if (before) screen.set(before);
+            gce = { disposal: 0, delay: 100, trans: -1 };
+        }
+        if (frames.length < 2) return null; // not animated: the normal picture is fine
+        const total = frames.reduce((a, f) => a + f.delay, 0);
+        return { frames, total, width: W, height: H };
+    }
+    const gifAnims = new Map(); // src → decoded frames (or null when it is not an animation)
+    function gifFrame(src) {
+        if (!/^data:image\/gif;base64,/.test(src)) return null;
+        if (!gifAnims.has(src)) {
+            let anim = null;
+            try {
+                const bin = atob(src.slice(src.indexOf(',') + 1));
+                const bytes = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                anim = decodeGif(bytes);
+            } catch (err) { anim = null; }
+            gifAnims.set(src, anim);
+        }
+        const anim = gifAnims.get(src);
+        if (!anim) return null;
+        let t = performance.now() % anim.total;
+        for (const f of anim.frames) { if (t < f.delay) return f.canvas; t -= f.delay; }
+        return anim.frames[0].canvas;
+    }
+    // keep redrawing while an animated GIF is on the drawing
+    let gifTimer = null;
+    function animateDrawGifs() {
+        clearTimeout(gifTimer);
+        if (state.prefs.mode !== 'draw' || state.prefs.activeTab === 'calendar' || document.hidden) return;
+        if (!state.draw.strokes.some((s) => s.image && gifAnims.get(s.image))) return;
+        gifTimer = setTimeout(() => { if (!state.draw.drawing) renderStrokes(); else animateDrawGifs(); }, 60);
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) animateDrawGifs(); });
 
     /* ---------------- pictures in the drawing ---------------- */
     const drawImageCache = new Map();
@@ -7162,7 +7518,9 @@ RemminStore.ready.then(() => {
                 el.className = `cb-item cb-${it.type === 'text' ? 'textbox' : it.type}`;
                 el.dataset.id = it.id;
                 el.innerHTML = it.type === 'frame' ? '<div class="cb-frame-title" spellcheck="false"></div>'
-                    : it.type === 'image' ? '<img draggable="false" alt="">' : '<div class="cb-text"></div>';
+                    : it.type === 'image' ? '<img draggable="false" alt="">'
+                    : it.type === 'video' ? `<div class="cb-video-bar" title="Drag here to move">▶ Video</div>${VIDEO_SRC_RE.test(it.src || '') ? videoFrameHtml(it.src) : ''}`
+                    : '<div class="cb-text"></div>';
                 cbEls.set(it.id, el);
             }
             const layer = it.type === 'frame' ? cbFramesEl : cbItemsEl;
@@ -7235,17 +7593,27 @@ RemminStore.ready.then(() => {
         const n = cb.items.filter((i) => i.type === 'frame').length + 1;
         return cbAdd({ type: 'frame', x, y, w, h, color: cbColorPref('frame'), title: `Frame ${n}` });
     }
+    function cbAddVideo(src, at) {
+        const note = noteById(cb.noteId);
+        if (!note || isPrivateLocked(note)) return;
+        const p = at || cbViewCenter();
+        cbRecord();
+        cbAdd({ type: 'video', x: p.x - 240, y: p.y - 146, w: 480, h: 292, src });
+        cbRender();
+        cbSave();
+    }
     async function cbAddImages(files, at) {
         const note = noteById(cb.noteId);
         if (!note || isPrivateLocked(note)) return;
-        const images = [...files].filter((f) => f.type && f.type.startsWith('image/'));
+        // files, or the web address of a picture (a KLIPY GIF that could not be downloaded)
+        const images = [...files].filter((f) => typeof f === 'string' || (f.type && f.type.startsWith('image/')));
         if (!images.length) return;
         const p = at || cbViewCenter();
         let recorded = false, offset = 0;
         const added = [];
         for (const file of images) {
             try {
-                const src = await imageFileToDataUrl(file);
+                const src = typeof file === 'string' ? file : await imageFileToDataUrl(file);
                 const img = new Image();
                 img.src = src;
                 await (img.decode ? img.decode().catch(() => {}) : new Promise((r) => { img.onload = img.onerror = r; }));
@@ -7413,6 +7781,12 @@ RemminStore.ready.then(() => {
                 });
                 break;
             case 'cbImageBtn': $('cbImageFile').click(); break;
+            case 'cbGifBtn': {
+                const at = cbViewCenter();
+                openGifPicker(async (url) => { const file = await fetchGifFile(url); cbAddImages([file || url], at); });
+                break;
+            }
+            case 'cbVideoBtn': askVideoUrl().then((src) => { if (src) cbAddVideo(src); }); break;
             case 'cbUndo': cbUndoRedo(true); break;
             case 'cbRedo': cbUndoRedo(false); break;
             case 'cbDup': cbDuplicate(); break;
@@ -7430,7 +7804,7 @@ RemminStore.ready.then(() => {
 
     // colour of the selected sticky notes / frames / arrows / texts (also the colour for new ones)
     function cbColor(color) {
-        const ids = [...cb.sel].filter((id) => cbById(id) && cbById(id).type !== 'image');
+        const ids = [...cb.sel].filter((id) => cbById(id) && cbById(id).type !== 'image' && cbById(id).type !== 'video');
         const prefs = state.prefs.collageColors = state.prefs.collageColors || {};
         if (!ids.length) {
             // nothing selected: the colour for the next sticky note
@@ -7696,7 +8070,7 @@ RemminStore.ready.then(() => {
             if (!it) return;
             if (!cbAct.recorded) { cbRecord(); cbAct.recorded = true; }
             it.w = Math.max(40, cbAct.w + dx);
-            if (it.type === 'image' || e.shiftKey) it.h = Math.max(20, it.w * cbAct.ratio);
+            if (it.type === 'image' || it.type === 'video' || e.shiftKey) it.h = Math.max(20, it.w * cbAct.ratio);
             else if (it.type !== 'text') it.h = Math.max(it.type === 'frame' ? 60 : 40, cbAct.h + dy);
             cbRender();
         } else if (cbAct.type === 'newframe') {
@@ -7799,7 +8173,7 @@ RemminStore.ready.then(() => {
             const it = cbById(itemEl.dataset.id);
             if (it && (it.type === 'sticky' || it.type === 'text')) { cbStartEdit(it.id); return; }
             if (it && it.type === 'frame' && target.closest('.cb-frame-title')) { cbStartEdit(it.id); return; }
-            if (it && it.type === 'image') return;
+            if (it && (it.type === 'image' || it.type === 'video')) return;
         }
         if (target.closest && target.closest('[data-arrow]')) return;
         cbNewSticky(p); // double-click on the board: a new sticky note
@@ -7892,6 +8266,8 @@ RemminStore.ready.then(() => {
                 .catch(() => toast('Could not paste that picture'));
             return;
         }
+        const vid = text && !/\s/.test(text.trim()) && videoEmbedUrl(text);
+        if (vid) { cbAddVideo(vid); return; }
         if (text && text.trim()) {
             const c = cbViewCenter();
             cbRecord();
@@ -9113,7 +9489,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'image sizes 1/8, 1/4, 1/2, full; Shift+click selects several things';
+    const PATCH_NOTE = 'animated GIFs, KLIPY GIFs and YouTube / Vimeo videos';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

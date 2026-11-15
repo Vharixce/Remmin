@@ -730,8 +730,45 @@ RemminStore.ready.then(() => {
             .map((x) => x.f);
     }
 
+    /* ---- search in the Explorer ---- */
+    const fold = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    function noteMatches(note, words) {
+        // private notes: only their title is searched
+        const parts = [note.title];
+        if (!note.private) {
+            parts.push(note.content);
+            if (note.project) (note.project.columns || []).forEach((c) => (c.cards || []).forEach((k) => parts.push(k.text)));
+            if (note.collage) (note.collage.items || []).forEach((it) => parts.push(it.title, it.html && htmlToText(it.html)));
+        }
+        const folder = state.folders.find((f) => f.id === note.folderId);
+        if (folder) parts.push(folder.name);
+        const hay = fold(parts.join(' \n '));
+        return words.every((w) => hay.includes(w));
+    }
+    function renderSearch(query) {
+        const words = fold(query).split(/\s+/).filter(Boolean);
+        const found = sortedNotes(state.notes.filter((n) => noteMatches(n, words))); // also notes hidden with 📆
+        treeEl.innerHTML = found.length
+            ? `<div class="search-count">${found.length} note${found.length === 1 ? '' : 's'} found</div><div class="folder-items search-results">${found.map(noteItemHtml).join('')}</div>`
+            : '<div class="search-count">No notes found</div>';
+        emptyEl.style.display = 'none';
+        makeTreeNotesDraggable();
+        updateTrashButton();
+    }
+    const searchInput = $('treeSearch');
+    searchInput.addEventListener('input', () => {
+        $('treeSearchClear').hidden = !searchInput.value;
+        renderTree();
+    });
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { searchInput.value = ''; $('treeSearchClear').hidden = true; renderTree(); searchInput.blur(); }
+        else if (e.key === 'Enter') { const first = treeEl.querySelector('.note-item'); if (first) first.click(); }
+    });
+    $('treeSearchClear').addEventListener('click', () => { searchInput.value = ''; $('treeSearchClear').hidden = true; renderTree(); searchInput.focus(); });
+
     function renderTree() {
         ensureNoteOrder();
+        if (searchInput.value.trim()) { renderSearch(searchInput.value); return; }
         treeEl.innerHTML = '';
         // notes set to "Show ONLY in Calendar" are not listed here
         const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId && !n.calendarOnly));
@@ -8988,7 +9025,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'new 📝 Make MEMO button: collapse small notes in the calendar';
+    const PATCH_NOTE = 'search bar in the Explorer';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

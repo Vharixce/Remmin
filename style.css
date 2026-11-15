@@ -2130,3 +2130,13 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 /* 📝 memo notes: one small icon per day in the month view */
 .calendar-memo { float: right; font-size: 12px; line-height: 1; opacity: .9; margin-left: 2px; }
 @media (max-width: 760px) { .calendar-memo { font-size: 9px; } }
+
+/* search in the Explorer */
+.tree-search { position: relative; padding: 0 10px 6px; }
+.tree-search input { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 6px 26px 6px 9px; }
+.tree-search input:focus { outline: none; border-color: var(--primary); }
+.tree-search input::-webkit-search-cancel-button { display: none; }
+.tree-search-clear { position: absolute; right: 14px; top: 50%; transform: translateY(calc(-50% - 3px)); background: none; border: 0; color: var(--text-dim); cursor: pointer; font-size: 11px; padding: 3px 5px; border-radius: 4px; }
+.tree-search-clear:hover { color: var(--text); background: rgba(255, 255, 255, .08); }
+.search-count { font-size: 11px; color: var(--text-dim); padding: 2px 12px 6px; }
+.search-results { margin-left: 0; padding-left: 0; border-left: 0; }

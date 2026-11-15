@@ -2140,3 +2140,10 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .tree-search-clear:hover { color: var(--text); background: rgba(255, 255, 255, .08); }
 .search-count { font-size: 11px; color: var(--text-dim); padding: 2px 12px 6px; }
 .search-results { margin-left: 0; padding-left: 0; border-left: 0; }
+
+/* several things selected */
+#imageTools[data-count]:not([data-count=""])::before { content: attr(data-count); font-size: 11px; color: var(--text-dim); margin-right: 4px; align-self: center; }
+.pj-card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(124, 111, 240, .45); }
+.pj-hidden { display: none !important; }
+.pj-ghost-count { position: absolute; top: -8px; right: -8px; background: var(--primary); color: #fff; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 7px; }
+.pj-sel-count { font-size: 11px; color: var(--primary); margin-left: 6px; }

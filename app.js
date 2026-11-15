@@ -387,8 +387,9 @@ RemminStore.ready.then(() => {
         note.scheduledAt = note.scheduledAt || null;
         note.folderId = note.folderId || null;
         if (note.color === OLD_BRIGHT_RED) note.color = NEW_BRIGHT_RED;
-        if (typeof note.html === 'string' && /<img[^>]*width:\s*(?:12\.5|25|50)%/i.test(note.html)) {
-            note.html = note.html.replace(/(<img[^>]*width:\s*)(12\.5|25|50)%/gi, (m, a, v) => `${a}${{ '12.5': 12, 25: 24, 50: 48 }[v]}%`);
+        if (typeof note.html === 'string' && /<img[^>]*width:\s*(?:12|24|48)%/i.test(note.html)) {
+            // picture sizes are 1/8, 1/4, 1/2 and full width (older versions used 12%, 24% and 48%)
+            note.html = note.html.replace(/(<img[^>]*width:\s*)(12|24|48)%/gi, (m, a, v) => `${a}${{ 12: 12.5, 24: 25, 48: 50 }[v]}%`);
         }
         // no spaces between pictures that stand next to each other
         if (typeof note.html === 'string' && /(<img[^>]*>)(?:\s|&nbsp;)+(?=<img)/i.test(note.html)) {
@@ -474,7 +475,7 @@ RemminStore.ready.then(() => {
         const list = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 100) : null);
         const out = { holidays: list(v.holidays), clocks: list(v.clocks), at: typeof v.at === 'string' ? v.at : null };
         if (typeof v.broadcast === 'string') out.broadcast = v.broadcast.slice(0, 300);
-        if ([12, 24, 48, 100].includes(Number(v.imgSize))) out.imgSize = Number(v.imgSize);
+        if ([12, 24, 48, 12.5, 25, 50, 100].includes(Number(v.imgSize))) out.imgSize = ({ 12: 12.5, 24: 25, 48: 50 })[Number(v.imgSize)] || Number(v.imgSize);
         if (v.collageColors && typeof v.collageColors === 'object') {
             out.collageColors = {};
             ['sticky', 'frame', 'arrow'].forEach((k) => { if (/^#[0-9a-f]{6}$/i.test(v.collageColors[k] || '')) out.collageColors[k] = v.collageColors[k]; });
@@ -2350,7 +2351,7 @@ RemminStore.ready.then(() => {
         return { before: n.nextSibling };
     }
     // the size you picked last time (S/M/L/Full) is used for new pictures
-    const lastImgSize = () => ([12, 24, 48, 100].includes(Number(state.prefs.imgSize)) ? Number(state.prefs.imgSize) : 24);
+    const lastImgSize = () => { const v = ({ 12: 12.5, 24: 25, 48: 50 })[Number(state.prefs.imgSize)] || Number(state.prefs.imgSize); return [12.5, 25, 50, 100].includes(v) ? v : 25; };
     function pictureLine(src) {
         const line = document.createElement('div');
         const img = document.createElement('img');
@@ -2567,11 +2568,19 @@ RemminStore.ready.then(() => {
         if (audio.length) { placeCaretAtPoint(e.clientX, e.clientY); insertAudioFiles(audio); }
     });
 
-    function selectImage(img) {
+    // the selected pictures (Shift + click adds or removes one); selectedImg is the last one clicked
+    let selectedImgs = [];
+    function selectImage(img, add = false) {
+        selectedImgs = selectedImgs.filter((i) => editorEl.contains(i));
+        if (add && img) {
+            if (selectedImgs.includes(img)) selectedImgs = selectedImgs.filter((i) => i !== img);
+            else selectedImgs.push(img);
+        } else selectedImgs = img ? [img] : [];
         editorEl.querySelectorAll('img.selected').forEach((i) => i.classList.remove('selected'));
-        selectedImg = img || null;
-        if (selectedImg) selectedImg.classList.add('selected');
+        selectedImgs.forEach((i) => i.classList.add('selected'));
+        selectedImg = selectedImgs[selectedImgs.length - 1] || null;
         $('imageTools').hidden = !selectedImg;
+        $('imageTools').dataset.count = selectedImgs.length > 1 ? `${selectedImgs.length} pictures` : '';
     }
 
     editorEl.addEventListener('click', (e) => {
@@ -2583,6 +2592,8 @@ RemminStore.ready.then(() => {
             return;
         }
         const img = e.target.closest('img');
+        if (e.shiftKey && img && editorEl.contains(img)) { e.preventDefault(); selectImage(img, true); return; }
+        if (e.shiftKey && !img && selectedImgs.length) return; // Shift + click on text keeps the pictures selected
         selectImage(img && editorEl.contains(img) ? img : null);
     });
     // Tab / Shift+Tab inside a list: indent / outdent the item
@@ -2599,7 +2610,8 @@ RemminStore.ready.then(() => {
     editorEl.addEventListener('keydown', (e) => {
         if (selectedImg && (e.key === 'Delete' || e.key === 'Backspace')) {
             e.preventDefault();
-            selectedImg.remove();
+            recordText();
+            selectedImgs.forEach((i) => i.remove());
             selectImage(null);
             markTextChanged();
         }
@@ -2629,7 +2641,7 @@ RemminStore.ready.then(() => {
         }
         const size = e.target.closest('[data-img-size]');
         if (size && selectedImg) {
-            selectedImg.style.width = `${size.dataset.imgSize}%`;
+            selectedImgs.filter((i) => editorEl.contains(i)).forEach((i) => { i.style.width = `${size.dataset.imgSize}%`; });
             state.prefs.imgSize = Number(size.dataset.imgSize);
             settingsChanged();
             markTextChanged();
@@ -2871,6 +2883,9 @@ RemminStore.ready.then(() => {
     // Download the selected picture (also possible with right-click → Save image as)
     $('imageDownload').addEventListener('click', () => {
         if (!selectedImg) return;
+        selectedImgs.filter((i) => editorEl.contains(i)).forEach((img, k) => setTimeout(() => downloadPicture(img), k * 250));
+    });
+    function downloadPicture(selectedImg) {
         const src = selectedImg.getAttribute('src') || '';
         const mime = (/^data:([^;,]+)/.exec(src) || [])[1] || 'image/png';
         const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' }[mime] || 'png';
@@ -2884,7 +2899,7 @@ RemminStore.ready.then(() => {
         document.body.appendChild(a);
         a.click();
         a.remove();
-    });
+    }
     // put the selected picture next to the picture(s) on the line above it
     $('imageSideBySide').addEventListener('click', () => {
         if (!selectedImg) return;
@@ -2911,7 +2926,7 @@ RemminStore.ready.then(() => {
     });
     $('imageRemove').addEventListener('click', () => {
         if (!selectedImg) return;
-        selectedImg.remove();
+        selectedImgs.forEach((i) => i.remove());
         selectImage(null);
         markTextChanged();
     });
@@ -5823,6 +5838,18 @@ RemminStore.ready.then(() => {
             canvas.style.cursor = 'nwse-resize';
             return;
         }
+        if (e.shiftKey) {
+            // Shift + click: add or remove one thing · Shift + drag: add everything in the box
+            const hit = itemAt(pos);
+            if (hit) {
+                drawPick = drawPick.includes(hit) ? drawPick.filter((s) => s !== hit) : [...drawPick, hit];
+                renderStrokes();
+                return;
+            }
+            marquee = { a: pos, b: pos, base: drawPick.slice() };
+            renderStrokes();
+            return;
+        }
         const pad = 6 / (canvas.clientWidth || 1);
         const inBox = box && pos.x >= box.x0 - pad && pos.x <= box.x1 + pad && pos.y >= box.y0 - pad && pos.y <= box.y1 + pad;
         const hit = inBox ? null : itemAt(pos);
@@ -5892,6 +5919,7 @@ RemminStore.ready.then(() => {
     }
 
     function endPick() {
+        if (!pickDrag && !marquee) return; // e.g. after a Shift + click
         if (pickDrag) {
             const moved = pickDrag.moved;
             pickDrag = null;
@@ -5902,13 +5930,15 @@ RemminStore.ready.then(() => {
         }
         const x0 = Math.min(marquee.a.x, marquee.b.x), x1 = Math.max(marquee.a.x, marquee.b.x);
         const y0 = Math.min(marquee.a.y, marquee.b.y), y1 = Math.max(marquee.a.y, marquee.b.y);
+        const base = marquee.base || [];
         marquee = null;
-        if (x1 - x0 < 0.004 && y1 - y0 < 0.004) { drawPick = []; renderStrokes(); return; }
-        // everything that touches the box
-        drawPick = state.draw.strokes.filter((s) => {
+        if (x1 - x0 < 0.004 && y1 - y0 < 0.004) { drawPick = base; renderStrokes(); return; }
+        // everything that touches the box (plus what was already selected, with Shift)
+        const inside = state.draw.strokes.filter((s) => {
             if (s.image) return s.x < x1 && s.x + s.w > x0 && s.y < y1 && s.y + s.h > y0;
             return s.points.some((p) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1);
         });
+        drawPick = [...new Set([...base, ...inside])];
         renderStrokes();
     }
 
@@ -6418,7 +6448,7 @@ RemminStore.ready.then(() => {
      * New boards start with To do / In progress / Review / Done (only saved once you change something). */
     const pjBoard = $('projectBoard');
     const pjCols = $('pjColumns');
-    const pj = { columns: [], people: [], departments: [], noteId: null, undo: [], redo: [], editing: null };
+    const pj = { columns: [], people: [], departments: [], noteId: null, undo: [], redo: [], editing: null, sel: new Set() };
     const PJ_DEFAULT = ['To do', 'In progress', 'Review', 'Done'];
     const pjDefault = () => PJ_DEFAULT.map((name) => ({ id: uid(), name, cards: [] }));
     const pjActive = () => state.prefs.mode === 'project' && state.prefs.activeTab !== 'calendar' && !!pj.noteId &&
@@ -6432,7 +6462,7 @@ RemminStore.ready.then(() => {
         pj.columns = Array.isArray(saved.columns) ? saved.columns : pjDefault();
         pj.people = Array.isArray(saved.people) ? saved.people : [];
         pj.departments = Array.isArray(saved.departments) ? saved.departments : [];
-        pj.undo = []; pj.redo = []; pj.editing = null;
+        pj.undo = []; pj.redo = []; pj.editing = null; pj.sel = new Set();
         renderProject();
     }
     function pjSave() {
@@ -6483,7 +6513,7 @@ RemminStore.ready.then(() => {
         const edge = depts.length ? `<span class="pj-edge" style="background:linear-gradient(to bottom, ${depts.map((d, i) =>
             `${escapeHtml(d.color)} ${(i * step).toFixed(2)}% ${((i + 1) * step).toFixed(2)}%`).join(', ')})"></span>` : '';
         return `
-                    <div class="pj-card${depts.length ? ' has-edge' : ''}" data-card="${card.id}">${edge}
+                    <div class="pj-card${depts.length ? ' has-edge' : ''}${pj.sel.has(card.id) ? ' selected' : ''}" data-card="${card.id}">${edge}
                         <span class="pj-grip" title="Drag to move" aria-hidden="true">⠿</span>
                         <div class="pj-card-text">${card.text ? escapeHtml(card.text) : '<span class="pj-untitled">Untitled</span>'}</div>
                         <div class="pj-card-foot">
@@ -6535,9 +6565,16 @@ RemminStore.ready.then(() => {
                 if (!g) return;
                 const editing = pj.editing && pj.editing.kind === 'card' && pj.editing.id === cardId;
                 if (!editing) pjRecord();
-                const now = new Set(g.card[field] || []);
-                if (now.has(x.id)) now.delete(x.id); else now.add(x.id);
-                g.card[field] = [...now];
+                const add = !(g.card[field] || []).includes(x.id);
+                // with several items selected: give (or take) it to all of them
+                const ids = !editing && pj.sel.has(cardId) && pj.sel.size > 1 ? [...pj.sel] : [cardId];
+                ids.forEach((cid) => {
+                    const h = pjFindCard(cid);
+                    if (!h) return;
+                    const now = new Set(h.card[field] || []);
+                    if (add) now.add(x.id); else now.delete(x.id);
+                    h.card[field] = [...now];
+                });
                 renderProject();           // an item being typed in stays open (and keeps its text)
                 if (!editing) pjSave();
             }
@@ -6599,6 +6636,8 @@ RemminStore.ready.then(() => {
     pjBoard.addEventListener('pointerdown', (e) => { if (e.target.closest('.pj-assign')) e.preventDefault(); });
 
     function renderProject() {
+        pj.sel = new Set([...pj.sel].filter((id) => pjFindCard(id)));
+        $('pjSelCount').textContent = pj.sel.size > 1 ? `${pj.sel.size} items selected · Delete to remove · drag to move them together` : '';
         renderProjectSide();
         $('pjUndo').disabled = !pj.undo.length;
         $('pjRedo').disabled = !pj.redo.length;
@@ -6785,7 +6824,19 @@ RemminStore.ready.then(() => {
             return;
         }
         const card = t.closest('.pj-card');
-        if (card && !card.classList.contains('editing') && !t.closest('.pj-card-foot')) pjEditCard(card.dataset.card);
+        if (card && e.shiftKey && !card.classList.contains('editing')) {
+            // Shift + click: select several items
+            const id = card.dataset.card;
+            if (pj.sel.has(id)) pj.sel.delete(id); else pj.sel.add(id);
+            renderProject();
+            return;
+        }
+        if (card && !card.classList.contains('editing') && !t.closest('.pj-card-foot')) {
+            if (pj.sel.size) { pj.sel = new Set(); }
+            pjEditCard(card.dataset.card);
+            return;
+        }
+        if (!card && pj.sel.size && !t.closest('button, input')) { pj.sel = new Set(); renderProject(); }
     });
     pjBoard.addEventListener('dblclick', (e) => {
         const name = e.target.closest('.pj-col-name');
@@ -6807,7 +6858,11 @@ RemminStore.ready.then(() => {
         holder.className = 'pj-holder';
         holder.style.height = `${r.height}px`;
         el.replaceWith(holder);
-        pjDrag = { id: p.id, ghost, holder, dx: p.x - r.left, dy: p.y - r.top, pointerId: p.pointerId };
+        // several selected items move together
+        const group = pj.sel.has(p.id) && pj.sel.size > 1 ? [...pj.sel] : [p.id];
+        group.forEach((id) => { if (id !== p.id) { const o = pjCols.querySelector(`[data-card="${id}"]`); if (o) o.classList.add('pj-hidden'); } });
+        if (group.length > 1) { const badge = document.createElement('span'); badge.className = 'pj-ghost-count'; badge.textContent = group.length; ghost.appendChild(badge); }
+        pjDrag = { id: p.id, group, ghost, holder, dx: p.x - r.left, dy: p.y - r.top, pointerId: p.pointerId };
         pjBoard.classList.add('dragging');
         pjMoveDrag(p.x, p.y);
     }
@@ -6818,7 +6873,7 @@ RemminStore.ready.then(() => {
         const colEl = under && under.closest('.pj-col');
         if (!colEl) return;
         const list = colEl.querySelector('.pj-cards');
-        const cards = [...list.querySelectorAll('.pj-card')];
+        const cards = [...list.querySelectorAll('.pj-card:not(.pj-hidden)')];
         const before = cards.find((c) => { const r = c.getBoundingClientRect(); return y < r.top + r.height / 2; });
         if (before) { if (before.previousSibling !== d.holder) list.insertBefore(d.holder, before); }
         else if (list.lastChild !== d.holder) list.appendChild(d.holder);
@@ -6834,14 +6889,19 @@ RemminStore.ready.then(() => {
         if (drop) {
             const list = d.holder.closest('.pj-cards');
             const colId = list && list.closest('.pj-col').dataset.col;
-            const index = list ? [...list.children].filter((c) => c === d.holder || c.classList.contains('pj-card')).indexOf(d.holder) : -1;
+            const index = list ? [...list.children].filter((c) => c === d.holder || (c.classList.contains('pj-card') && !c.classList.contains('pj-hidden'))).indexOf(d.holder) : -1;
             const f = pjFindCard(d.id);
-            if (f && colId && index >= 0 && !(f.col.id === colId && f.i === index)) {
+            const moved = d.group.length > 1 || (f && !(f.col.id === colId && f.i === index));
+            if (f && colId && index >= 0 && moved) {
                 pjRecord();
-                const [card] = f.col.cards.splice(f.i, 1);
-                pjCol(colId).cards.splice(index, 0, card);
+                // take the items out (in board order), then put them in at the drop place
+                const order = [];
+                pj.columns.forEach((c) => c.cards.forEach((k) => { if (d.group.includes(k.id)) order.push(k); }));
+                pj.columns.forEach((c) => { c.cards = c.cards.filter((k) => !d.group.includes(k.id)); });
+                pjCol(colId).cards.splice(index, 0, ...order);
                 pjSave();
             }
+            if (d.group.length > 1) pj.sel = new Set(); // moved together: done with this selection
         }
         renderProject();
     }
@@ -6850,6 +6910,7 @@ RemminStore.ready.then(() => {
         const card = e.target.closest('.pj-card');
         if (!card || card.classList.contains('editing') || e.target.closest('.pj-card-del, .pj-assign')) return;
         const grip = e.target.closest('.pj-grip');
+        if (e.shiftKey && !grip) return; // Shift + click selects
         if (e.pointerType !== 'mouse' && !grip) return; // on a touch screen the card itself scrolls / opens
         pjPress = { id: card.dataset.card, x: e.clientX, y: e.clientY, pointerId: e.pointerId };
         if (grip) { e.preventDefault(); const pr = pjPress; pjPress = null; pjStartDrag(pr); }
@@ -6888,6 +6949,17 @@ RemminStore.ready.then(() => {
         if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'z') { e.preventDefault(); pjUndoRedo(!e.shiftKey); }
         else if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'y') { e.preventDefault(); pjUndoRedo(false); }
         else if (e.key === 'Escape' && pjDrag) pjEndDrag(false);
+        else if (e.key === 'Escape' && pj.sel.size) { pj.sel = new Set(); renderProject(); }
+        else if ((e.key === 'Delete' || e.key === 'Backspace') && pj.sel.size) {
+            e.preventDefault();
+            pjRecord();
+            pj.columns.forEach((c) => { c.cards = c.cards.filter((k) => !pj.sel.has(k.id)); });
+            const n = pj.sel.size;
+            pj.sel = new Set();
+            renderProject();
+            pjSave();
+            toast(`${n} item${n === 1 ? '' : 's'} deleted (↶ to undo)`);
+        }
     });
 
 
@@ -8172,7 +8244,7 @@ RemminStore.ready.then(() => {
         const erase = isEraseButton(e);
         if (!erase && e.button > 0) return;
         if (erase && (gridStroke || gridPickDrag || gridMarquee)) return;
-        if (gridTool === 'select' && !erase) { startGridPick(note, pos, e.altKey); return; }
+        if (gridTool === 'select' && !erase) { startGridPick(note, pos, e.altKey, e.shiftKey); return; }
         gridStroke = { changes: new Map(), last: pos, type: gridKey(note), erase };
         gridPaintAt(note, pos);
     });
@@ -8293,10 +8365,23 @@ RemminStore.ready.then(() => {
         g.restore();
     }
 
-    function startGridPick(note, pos, alt) {
+    function startGridPick(note, pos, alt, shift = false) {
         const grid = gridOf(note);
         const cells = gridCellsOf(note);
         const hit = gridHit(grid, pos.x, pos.y);
+        if (shift) {
+            // Shift + click: add or remove a filled cell · Shift + drag: add the cells in the box
+            if (hit && cells[hit.id]) {
+                gridPick = gridPick.includes(hit.id) ? gridPick.filter((id) => id !== hit.id) : [...gridPick, hit.id];
+                gridCopyMode = false;
+                renderGrid();
+                updateGridPickBar();
+                return;
+            }
+            gridMarquee = { a: pos, b: pos, base: gridPick.slice() };
+            renderGrid();
+            return;
+        }
         if (hit && gridPick.includes(hit.id)) {
             // drag the selection (with Alt, or after "Copy": leave the originals)
             gridPickDrag = {
@@ -8380,6 +8465,7 @@ RemminStore.ready.then(() => {
     }
 
     function endGridPick() {
+        if (!gridPickDrag && !gridMarquee) return; // e.g. after a Shift + click
         const note = noteById(state.currentNoteId);
         if (gridPickDrag) {
             const d = gridPickDrag;
@@ -8396,17 +8482,19 @@ RemminStore.ready.then(() => {
             return;
         }
         const { a, b } = gridMarquee;
+        const base = gridMarquee.base || [];
         gridMarquee = null;
         if (note) {
             const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
             const grid = gridOf(note);
             const cells = gridCellsOf(note);
             // every filled cell whose middle is inside the box
-            gridPick = grid.cells.filter((c) => {
+            const inside = grid.cells.filter((c) => {
                 if (!cells[c.id]) return false;
                 const m = cellCenter(c);
                 return m.x >= x0 && m.x <= x1 && m.y >= y0 && m.y <= y1;
             }).map((c) => c.id);
+            gridPick = [...new Set([...base, ...inside])];
         }
         renderGrid();
         updateGridPickBar();
@@ -9025,7 +9113,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'new Draw/Grid notes start on very dark blue';
+    const PATCH_NOTE = 'image sizes 1/8, 1/4, 1/2, full; Shift+click selects several things';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

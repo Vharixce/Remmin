@@ -2155,6 +2155,24 @@ RemminStore.ready.then(() => {
     }
 
     $('headingBtn').addEventListener('click', toggleHeading);
+    // Heading works like a switch: Enter on a heading line starts another heading line,
+    // until you click Heading again
+    function headingAt(container) {
+        const sel = window.getSelection();
+        const node = sel.rangeCount ? sel.anchorNode : null;
+        if (!node || !container.contains(node)) return null;
+        const h = (node.nodeType === 1 ? node : node.parentElement).closest('h1, h2, h3');
+        return h && container.contains(h) ? h : null;
+    }
+    function keepHeadingOnEnter(e, container, after) {
+        if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.isComposing) return;
+        if (!headingAt(container)) return;
+        setTimeout(() => {
+            if (!headingAt(container)) document.execCommand('formatBlock', false, '<h2>');
+            if (after) after();
+        }, 0);
+    }
+    editorEl.addEventListener('keydown', (e) => keepHeadingOnEnter(e, editorEl, () => { markTextChanged(); updateToolbarState(); }));
     editorEl.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key === '2') { e.preventDefault(); toggleHeading(); }
     });
@@ -2600,6 +2618,7 @@ RemminStore.ready.then(() => {
         selectedImgs.forEach((i) => i.classList.add('selected'));
         selectedImg = selectedImgs[selectedImgs.length - 1] || null;
         $('imageTools').hidden = !selectedImg;
+        placeImgHandle();
         $('imageTools').dataset.count = selectedImgs.length > 1 ? `${selectedImgs.length} pictures` : '';
     }
 
@@ -2671,6 +2690,7 @@ RemminStore.ready.then(() => {
         const size = e.target.closest('[data-img-size]');
         if (size && selectedImg) {
             selectedImgs.filter((i) => editorEl.contains(i)).forEach((i) => { i.style.width = `${size.dataset.imgSize}%`; });
+            requestAnimationFrame(placeImgHandle);
             state.prefs.imgSize = Number(size.dataset.imgSize);
             settingsChanged();
             markTextChanged();
@@ -3141,6 +3161,52 @@ RemminStore.ready.then(() => {
         selectImage(selectedImg);
         markTextChanged();
     });
+    /* ---- corner handle on the selected picture(s): drag to make them all bigger / smaller ---- */
+    const imgHandle = document.createElement('div');
+    imgHandle.className = 'img-scale-handle';
+    imgHandle.title = 'Drag to make the selected picture(s) bigger / smaller';
+    imgHandle.hidden = true;
+    document.body.appendChild(imgHandle);
+    function placeImgHandle() {
+        const img = selectedImg && editorEl.contains(selectedImg) && state.prefs.mode === 'text' && editorEl.offsetParent ? selectedImg : null;
+        imgHandle.hidden = !img;
+        if (!img) return;
+        const r = img.getBoundingClientRect();
+        imgHandle.style.left = `${r.right - 7}px`;
+        imgHandle.style.top = `${r.bottom - 7}px`;
+    }
+    window.addEventListener('scroll', placeImgHandle, true);
+    window.addEventListener('resize', placeImgHandle);
+    editorEl.addEventListener('input', () => requestAnimationFrame(placeImgHandle));
+    let imgScale = null;
+    imgHandle.addEventListener('pointerdown', (e) => {
+        if (!selectedImg) return;
+        e.preventDefault();
+        imgHandle.setPointerCapture(e.pointerId);
+        recordText();
+        const imgs = selectedImgs.filter((i) => editorEl.contains(i));
+        imgScale = { x: e.clientX, w0: selectedImg.getBoundingClientRect().width || 1, pct0: parseFloat(selectedImg.style.width) || 100,
+            orig: imgs.map((i) => [i, parseFloat(i.style.width) || 100]) };
+    });
+    imgHandle.addEventListener('pointermove', (e) => {
+        if (!imgScale) return;
+        let f = Math.max(0.05, (imgScale.w0 + e.clientX - imgScale.x) / imgScale.w0);
+        // snap to S / M / L / Full when close
+        const want = imgScale.pct0 * f;
+        const snap = [12.5, 25, 50, 100].find((v) => Math.abs(v - want) < 1.5);
+        if (snap) f = snap / imgScale.pct0;
+        imgScale.orig.forEach(([img, pct]) => { img.style.width = `${Math.round(Math.min(100, Math.max(3, pct * f)) * 10) / 10}%`; });
+        placeImgHandle();
+    });
+    const endImgScale = () => {
+        if (!imgScale) return;
+        imgScale = null;
+        markTextChanged();
+        placeImgHandle();
+    };
+    imgHandle.addEventListener('pointerup', endImgScale);
+    imgHandle.addEventListener('pointercancel', endImgScale);
+
     $('imageRemove').addEventListener('click', () => {
         if (!selectedImg) return;
         selectedImgs.forEach((i) => i.remove());
@@ -6774,6 +6840,7 @@ RemminStore.ready.then(() => {
 
     function setMode(mode) {
         if (!['text', 'collage', 'project', 'draw', 'grid'].includes(mode)) mode = 'text';
+        if (typeof placeImgHandle === 'function') requestAnimationFrame(placeImgHandle);
         if (mode !== 'collage' && typeof cbEndEdit === 'function') cbEndEdit(true);
         state.prefs.mode = mode;
         savePrefs();
@@ -7563,6 +7630,19 @@ RemminStore.ready.then(() => {
         cbEls.forEach((el, id) => { if (!seen.has(id)) { el.remove(); cbEls.delete(id); } });
         cbRenderArrows();
         $('cbEmpty').hidden = cb.items.length > 0;
+        // several things selected: a box around them with the same corner handle, to scale them together
+        let group = $('cbGroupBox');
+        const b = cb.sel.size > 1 && !cb.editing ? cbBounds(cb.items.filter((it) => cb.sel.has(it.id))) : null;
+        if (b) {
+            if (!group) {
+                group = document.createElement('div');
+                group.id = 'cbGroupBox';
+                group.className = 'cb-group-box';
+                group.innerHTML = '<div class="cb-group-handle" title="Drag to make the selection bigger / smaller"></div>';
+                cbWorld.appendChild(group);
+            }
+            Object.assign(group.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px`, display: 'block' });
+        } else if (group) group.style.display = 'none';
         cbUpdateToolbar();
     }
     function cbUpdateToolbar() {
@@ -7700,6 +7780,9 @@ RemminStore.ready.then(() => {
     });
     cbBoard.addEventListener('keydown', (e) => {
         if (!cb.editing) return;
+        const editEl = cbEls.get(cb.editing);
+        const textEl = editEl && editEl.querySelector('.cb-text');
+        if (textEl) keepHeadingOnEnter(e, textEl, updateCbHeadingBtn);
         const it = cbById(cb.editing);
         if (e.key === 'Escape' || (it && it.type === 'frame' && e.key === 'Enter')) { e.preventDefault(); cbEndEdit(true); }
         e.stopPropagation(); // typing never triggers the board shortcuts
@@ -7792,6 +7875,7 @@ RemminStore.ready.then(() => {
                     const inH = n && (n.nodeType === 1 ? n : n.parentElement).closest('h1, h2, h3');
                     document.execCommand('formatBlock', false, inH && t.contains(inH) ? '<div>' : '<h2>');
                 });
+                updateCbHeadingBtn();
                 break;
             case 'cbImageBtn': $('cbImageFile').click(); break;
             case 'cbGifBtn': {
@@ -7995,6 +8079,18 @@ RemminStore.ready.then(() => {
             cbAct = { type: 'arrowend', id, which: end.dataset.end, recorded: false };
             return;
         }
+        if (e.target.closest('.cb-group-handle')) {
+            const ids = cbExpanded(cb.sel);
+            const b = cbBounds(cb.items.filter((it) => cb.sel.has(it.id)));
+            if (!b) return;
+            const orig = new Map();
+            cb.items.forEach((it) => {
+                if (!ids.has(it.id)) return;
+                orig.set(it.id, it.type === 'arrow' ? { from: { ...it.from }, to: { ...it.to } } : { x: it.x, y: it.y, w: it.w, h: it.h });
+            });
+            cbAct = { type: 'groupscale', start: p, b, orig, recorded: false };
+            return;
+        }
         if (e.target.closest('.cb-handle')) {
             const it = cbById([...cb.sel][0]);
             if (!it) return;
@@ -8078,6 +8174,25 @@ RemminStore.ready.then(() => {
                 } else { it.x = o.x + dx; it.y = o.y + dy; }
             });
             cbRender();
+        } else if (cbAct.type === 'groupscale') {
+            const { b, orig } = cbAct;
+            // same factor for width and height; the top-left corner stays put
+            const f = Math.max(0.1, Math.max((b.w + dx) / Math.max(1, b.w), (b.h + dy) / Math.max(1, b.h)));
+            if (!cbAct.recorded) { if (Math.abs(f - 1) < 0.01) return; cbRecord(); cbAct.recorded = true; }
+            const sx = (v) => b.x + (v - b.x) * f, sy = (v) => b.y + (v - b.y) * f;
+            orig.forEach((o, id) => {
+                const it = cbById(id);
+                if (!it) return;
+                if (it.type === 'arrow') {
+                    if (!o.from.id) it.from = { x: sx(o.from.x), y: sy(o.from.y) };
+                    if (!o.to.id) it.to = { x: sx(o.to.x), y: sy(o.to.y) };
+                    return;
+                }
+                it.x = sx(o.x); it.y = sy(o.y);
+                it.w = Math.max(20, o.w * f);
+                if (o.h != null) it.h = Math.max(20, o.h * f);
+            });
+            cbRender();
         } else if (cbAct.type === 'resize') {
             const it = cbById(cbAct.id);
             if (!it) return;
@@ -8146,7 +8261,7 @@ RemminStore.ready.then(() => {
         if (act.type === 'move') {
             if (act.moved) cbSave(); else tapped = true;
             if (act.recorded && !act.moved) cbSave(); // an Alt-click copy
-        } else if (act.type === 'resize' || act.type === 'arrowend') {
+        } else if (act.type === 'resize' || act.type === 'arrowend' || act.type === 'groupscale') {
             if (act.recorded) cbSave();
         } else if (act.type === 'newframe') {
             if (!act.id) { cbRecord(); cbNewFrame(p.x - 320, p.y - 210, 640, 420); }
@@ -8290,6 +8405,13 @@ RemminStore.ready.then(() => {
         }
     });
     window.addEventListener('resize', () => { if (state.prefs.mode === 'collage') cbRenderArrows(); });
+    // the Heading button is lit while you type in a heading line
+    function updateCbHeadingBtn() {
+        const el = cb.editing && cbEls.get(cb.editing);
+        const t = el && el.querySelector('.cb-text');
+        $('cbHeading').classList.toggle('active', !!(t && headingAt(t)));
+    }
+    document.addEventListener('selectionchange', () => { if (state.prefs.mode === 'collage') updateCbHeadingBtn(); });
     // Ctrl (+ scroll) over a video must zoom the board, not the page: the video stops catching the mouse
     const setCtrlHeld = (on) => document.body.classList.toggle('ctrl-held', on);
     document.addEventListener('keydown', (e) => { if (e.key === 'Control' || e.key === 'Meta') setCtrlHeld(true); });
@@ -8671,7 +8793,7 @@ RemminStore.ready.then(() => {
     });
 
     function endGridStroke() {
-        if (gridPickDrag || gridMarquee) { endGridPick(); return; }
+        if (gridPickDrag || gridMarquee || gridScaleDrag) { endGridPick(); return; }
         if (!gridStroke) return;
         const stroke = gridStroke;
         gridStroke = null;
@@ -8720,6 +8842,50 @@ RemminStore.ready.then(() => {
     let gridPick = [];        // ids of the selected cells
     let gridMarquee = null;   // { a, b } while dragging a selection box
     let gridPickDrag = null;  // while moving the selection
+    let gridScaleDrag = null; // while scaling the selection with its corner handle
+    function gridPickBox(grid) {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        gridPick.forEach((id) => {
+            const c = grid.byId.get(id);
+            if (!c) return;
+            x0 = Math.min(x0, c.x0); y0 = Math.min(y0, c.y0); x1 = Math.max(x1, c.x1); y1 = Math.max(y1, c.y1);
+        });
+        return x0 === Infinity ? null : { x0, y0, x1, y1 };
+    }
+    function onGridScaleHandle(pos, box) {
+        if (!box) return false;
+        const r = gridCanvas.getBoundingClientRect();
+        return Math.abs(pos.x - box.x1) * r.width <= 12 && Math.abs(pos.y - box.y1) * r.height <= 12;
+    }
+    // the selected colours drawn again, f times as big, from the top-left corner of the selection
+    function scaleGridCells(grid, colors, box, f) {
+        const colorOf = new Map(colors);
+        const back = (q) => ({ x: box.x0 + (q.x - box.x0) / f, y: box.y0 + (q.y - box.y0) / f });
+        const nx1 = box.x0 + (box.x1 - box.x0) * f, ny1 = box.y0 + (box.y1 - box.y0) * f;
+        const out = [];
+        grid.cells.forEach((t) => {
+            if (t.x1 < box.x0 || t.x0 > nx1 || t.y1 < box.y0 || t.y0 > ny1) return;
+            const m = cellCenter(t);
+            const spots = [m, ...[0, 1, 2, 3].map((k) => {
+                const v = t.pts[Math.floor(k * t.pts.length / 4)];
+                return { x: m.x + (v[0] - m.x) * 0.5, y: m.y + (v[1] - m.y) * 0.5 };
+            })];
+            const votes = new Map();
+            let hits = 0;
+            spots.forEach((q) => {
+                const c = gridHit(grid, ...Object.values(back(q)));
+                const col = c && colorOf.get(c.id);
+                if (!col) return;
+                hits++;
+                votes.set(col, (votes.get(col) || 0) + 1);
+            });
+            if (hits < (f < 1 ? 1 : 2)) return;
+            let best = null, n = 0;
+            votes.forEach((v, col) => { if (v > n) { n = v; best = col; } });
+            out.push([t.id, best]);
+        });
+        return out;
+    }
     let gridCopyMode = false; // the next move leaves the originals where they are (a copy)
     let gridClipboard = null; // { key, cells: [[id, colour]] }
     const GRID_COPY_MARK = '[Remmin grid selection]';
@@ -8758,6 +8924,16 @@ RemminStore.ready.then(() => {
             g.fill();
             g.stroke();
         });
+        // the corner handle: drag it to make the selection bigger / smaller
+        const pb = gridPick.length && !gridMarquee && !gridPickDrag ? gridPickBox(grid) : null;
+        if (pb) {
+            const hs = 13 * px, cx = v.ox + pb.x1 * v.sx, cy = v.oy + pb.y1 * v.sy;
+            g.setLineDash([]);
+            g.fillStyle = '#7c6ff0';
+            g.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
+            g.fillStyle = '#ffffff';
+            g.fillRect(cx - hs / 4, cy - hs / 4, hs / 2, hs / 2);
+        }
         if (gridMarquee) {
             const { a, b } = gridMarquee;
             g.strokeStyle = '#c4b5fd';
@@ -8773,6 +8949,13 @@ RemminStore.ready.then(() => {
         const grid = gridOf(note);
         const cells = gridCellsOf(note);
         const hit = gridHit(grid, pos.x, pos.y);
+        const pbox = gridPick.length && !shift ? gridPickBox(grid) : null;
+        if (pbox && onGridScaleHandle(pos, pbox)) {
+            gridScaleDrag = { key: gridKey(note), base: { ...cells }, box: pbox, start: pos, f: 1,
+                colors: gridPick.map((id) => [id, cells[id]]).filter(([, c]) => c), orig: gridPick.slice() };
+            gridCanvas.style.cursor = 'nwse-resize';
+            return;
+        }
         if (shift) {
             // Shift + click: add or remove a filled cell · Shift + drag: add the cells in the box
             if (hit && cells[hit.id]) {
@@ -8817,6 +9000,22 @@ RemminStore.ready.then(() => {
         if (!note) return;
         const pos = gridPos(e);
         const grid = gridOf(note);
+        if (gridScaleDrag) {
+            e.preventDefault();
+            const d = gridScaleDrag, b = d.box;
+            const bw = Math.max(b.x1 - b.x0, 1e-4), bh = Math.max(b.y1 - b.y0, 1e-4);
+            const f = Math.min(10, Math.max(0.15, Math.max((bw + pos.x - d.start.x) / bw, (bh + pos.y - d.start.y) / bh)));
+            if (Math.abs(f - d.f) < 0.02) return;
+            d.f = f;
+            const cells = { ...d.base };
+            d.colors.forEach(([id]) => { delete cells[id]; });
+            const scaled = Math.abs(f - 1) < 0.02 ? d.colors : scaleGridCells(grid, d.colors, b, f);
+            scaled.forEach(([id, c]) => { cells[id] = c; });
+            note.grids[d.key] = cells;
+            gridPick = scaled.map(([id]) => id);
+            renderGrid();
+            return;
+        }
         if (gridPickDrag) {
             e.preventDefault();
             const d = gridPickDrag;
@@ -8850,6 +9049,7 @@ RemminStore.ready.then(() => {
             return;
         }
         const hit = gridHit(grid, pos.x, pos.y);
+        if (gridPick.length && onGridScaleHandle(pos, gridPickBox(grid))) { gridCanvas.style.cursor = 'nwse-resize'; return; }
         gridCanvas.style.cursor = hit && (gridPick.includes(hit.id) || gridCellsOf(note)[hit.id]) ? 'move' : 'default';
     }
 
@@ -8869,6 +9069,16 @@ RemminStore.ready.then(() => {
     }
 
     function endGridPick() {
+        if (gridScaleDrag) {
+            const d = gridScaleDrag;
+            gridScaleDrag = null;
+            const note = noteById(state.currentNoteId);
+            if (note && Math.abs(d.f - 1) >= 0.02) commitGridChange(note, d.key, d.base);
+            else if (note) { note.grids[d.key] = d.base; gridPick = d.orig; }
+            renderGrid();
+            updateGridPickBar();
+            return;
+        }
         if (!gridPickDrag && !gridMarquee) return; // e.g. after a Shift + click
         const note = noteById(state.currentNoteId);
         if (gridPickDrag) {
@@ -9517,7 +9727,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'own background colour for Draw and for every grid';
+    const PATCH_NOTE = 'Heading is now a switch: big letters until you turn it off';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

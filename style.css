@@ -2183,3 +2183,13 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .cb-video:not(.selected) iframe, .ctrl-held .cb-video iframe { pointer-events: none; }
 .cb-video:not(.selected)::after { content: 'Click to select, then play'; position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-size: 11px; color: #fff; background: rgba(0, 0, 0, .6); padding: 2px 8px; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity .15s; }
 .cb-video:not(.selected):hover::after { opacity: 1; }
+
+/* scale handle for several selected things */
+.cb-group-box { position: absolute; display: none; pointer-events: none; outline: calc(1.5px / var(--cbs)) dashed var(--primary); outline-offset: calc(6px / var(--cbs)); }
+.cb-group-handle {
+    position: absolute; right: calc(-14px / var(--cbs)); bottom: calc(-14px / var(--cbs)); pointer-events: all;
+    width: calc(13px / var(--cbs)); height: calc(13px / var(--cbs));
+    background: #fff; border: calc(2px / var(--cbs)) solid var(--primary); border-radius: 3px; cursor: nwse-resize;
+}
+.img-scale-handle { position: fixed; z-index: 60; width: 14px; height: 14px; background: #fff; border: 2px solid var(--primary); border-radius: 3px; cursor: nwse-resize; touch-action: none; }
+.img-scale-handle[hidden] { display: none; }

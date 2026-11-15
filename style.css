@@ -2178,3 +2178,8 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .gif-key a { color: var(--primary); }
 .gif-key-row { display: flex; gap: 8px; margin-top: 8px; }
 .gif-key-input { flex: 1; font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+
+/* Collage videos: click a video to use it; while it is not selected (or Ctrl is held) the board gets the mouse */
+.cb-video:not(.selected) iframe, .ctrl-held .cb-video iframe { pointer-events: none; }
+.cb-video:not(.selected)::after { content: 'Click to select, then play'; position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-size: 11px; color: #fff; background: rgba(0, 0, 0, .6); padding: 2px 8px; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity .15s; }
+.cb-video:not(.selected):hover::after { opacity: 1; }

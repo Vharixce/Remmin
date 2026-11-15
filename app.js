@@ -226,7 +226,7 @@ RemminStore.ready.then(() => {
             sidebarCollapsed: false,
             activeTab: 'note',
             expandedFolders: [],
-            scheduleCollapsed: false,
+            scheduleCollapsed: true,
             mode: 'text'
         },
         alarms: {},
@@ -412,6 +412,13 @@ RemminStore.ready.then(() => {
         note.strokes = Array.isArray(note.strokes) ? note.strokes : [];
         // the first, lighter "very dark" colours → the new ones
         if (OLD_VERY_DARK[note.canvasBackground]) note.canvasBackground = OLD_VERY_DARK[note.canvasBackground];
+        // grids used to share Draw's background: grids with something on them keep that colour
+        if (!note.gridBgs || typeof note.gridBgs !== 'object') {
+            note.gridBgs = {};
+            Object.entries(note.grids || {}).forEach(([k, cells]) => {
+                if (cells && Object.keys(cells).length && note.canvasBackground) note.gridBgs[k] = note.canvasBackground;
+            });
+        } else Object.keys(note.gridBgs).forEach((k) => { if (OLD_VERY_DARK[note.gridBgs[k]]) note.gridBgs[k] = OLD_VERY_DARK[note.gridBgs[k]]; });
         note.strokes.forEach((st) => { if (st && OLD_VERY_DARK[st.color]) st.color = OLD_VERY_DARK[st.color]; });
         if (note.grids && typeof note.grids === 'object') {
             Object.values(note.grids).forEach((cells) => {
@@ -1225,8 +1232,8 @@ RemminStore.ready.then(() => {
 
     function selectNote(id) {
         flushEditor();
-        if (state.prefs.scheduleCollapsed) {
-            state.prefs.scheduleCollapsed = false;   // always show when/how the note is scheduled
+        if (!state.prefs.scheduleCollapsed) {
+            state.prefs.scheduleCollapsed = true;    // "Scheduled" starts folded (its header shows when)
             savePrefs();
         }
         state.currentNoteId = id;
@@ -3673,6 +3680,12 @@ RemminStore.ready.then(() => {
 
     function applyScheduleCollapse() {
         const collapsed = state.prefs.scheduleCollapsed;
+        // the header says when the note is planned, so it is useful while folded too
+        const note = noteById(state.currentNoteId);
+        const d = note && parseDate(note.scheduledAt);
+        $('scheduleHeader').firstElementChild.textContent = !d ? 'Scheduled'
+            : `Scheduled · ${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' })} ${formatTime(note.scheduledAt)}` +
+              `${note.alarmEnabled ? ' · ⏰' : ''}${note.emailEnabled ? ' · ✉' : ''}${isRecurring(note) ? ' · ↻' : ''}`;
         $('scheduleBody').style.display = collapsed ? 'none' : 'flex';
         $('scheduleChevron').textContent = String.fromCharCode(collapsed ? 9656 : 9662);
     }
@@ -8277,6 +8290,12 @@ RemminStore.ready.then(() => {
         }
     });
     window.addEventListener('resize', () => { if (state.prefs.mode === 'collage') cbRenderArrows(); });
+    // Ctrl (+ scroll) over a video must zoom the board, not the page: the video stops catching the mouse
+    const setCtrlHeld = (on) => document.body.classList.toggle('ctrl-held', on);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Control' || e.key === 'Meta') setCtrlHeld(true); });
+    document.addEventListener('keyup', (e) => { if (e.key === 'Control' || e.key === 'Meta') setCtrlHeld(false); });
+    window.addEventListener('blur', () => setCtrlHeld(false));
+    document.addEventListener('pointermove', (e) => { if (!e.ctrlKey && !e.metaKey && document.body.classList.contains('ctrl-held')) setCtrlHeld(false); }, { passive: true });
 
 
     /* ---------------- grid mode (fill cells by drawing over them) ---------------- */
@@ -8328,6 +8347,15 @@ RemminStore.ready.then(() => {
         return { type, size, rot };
     }
     // Where the filled cells are stored: the original L / 0° grids keep their old key
+    // every grid (type / size / turn) has its own background colour; Draw has note.canvasBackground
+    const gridBgOf = (note) => (note && note.gridBgs && note.gridBgs[gridKey(note)]) || DEFAULT_CANVAS_BG;
+    // the background colour of what is on screen now (Draw, or the grid that is open)
+    function setCanvasBg(note, color) {
+        if (state.prefs.mode === 'grid') {
+            note.gridBgs = note.gridBgs || {};
+            note.gridBgs[gridKey(note)] = color;
+        } else note.canvasBackground = color;
+    }
     function gridKey(note) {
         const { type, size, rot } = gridSettings(note);
         return size === 'L' && rot === 0 ? type : `${type}@${size}@${rot}`;
@@ -8515,7 +8543,7 @@ RemminStore.ready.then(() => {
 
     function renderGrid() {
         const note = noteById(state.currentNoteId);
-        const bg = (note && note.canvasBackground) || DEFAULT_CANVAS_BG;
+        const bg = gridBgOf(note);
         drawGridOn(mainGridView(), note, bg);
         renderGridDetail();
     }
@@ -8575,7 +8603,7 @@ RemminStore.ready.then(() => {
             ox: tx * dpr,
             oy: ty * dpr
         };
-        drawGridOn(gridDetailView, note, (note && note.canvasBackground) || DEFAULT_CANVAS_BG);
+        drawGridOn(gridDetailView, note, gridBgOf(note));
         gridDetail.hidden = false;
     }
 
@@ -8606,7 +8634,7 @@ RemminStore.ready.then(() => {
         if (prev === next) return;
         if (!gridStroke.changes.has(c.id)) gridStroke.changes.set(c.id, prev);
         if (next) cells[c.id] = next; else delete cells[c.id];
-        paintGridCell(c, next, note.canvasBackground || DEFAULT_CANVAS_BG);
+        paintGridCell(c, next, gridBgOf(note));
     }
 
     gridCanvas.addEventListener('pointerdown', (e) => {
@@ -8917,7 +8945,7 @@ RemminStore.ready.then(() => {
         out.width = Math.max(1, Math.round((x1 - x0) * side) + 2 * pad);
         out.height = Math.max(1, Math.round((y1 - y0) * side) + 2 * pad);
         const g = out.getContext('2d');
-        const bg = note.canvasBackground || DEFAULT_CANVAS_BG;
+        const bg = gridBgOf(note);
         g.fillStyle = bg;
         g.fillRect(0, 0, out.width, out.height);
         const v = { g, sx: side, sy: side, ox: pad - x0 * side, oy: pad - y0 * side };
@@ -9195,7 +9223,7 @@ RemminStore.ready.then(() => {
     buildPalette($('canvasPalette'), (color) => {
         const note = noteById(state.currentNoteId);
         if (!note) return;
-        note.canvasBackground = color;
+        setCanvasBg(note, color);
         $('canvasBgCustom').value = color;
         touch(note);
         renderStrokes();
@@ -9216,7 +9244,7 @@ RemminStore.ready.then(() => {
 
     $('toolCanvasBg').addEventListener('click', () => {
         const note = noteById(state.currentNoteId);
-        if (note) $('canvasBgCustom').value = note.canvasBackground || DEFAULT_CANVAS_BG;
+        if (note) $('canvasBgCustom').value = state.prefs.mode === 'grid' ? gridBgOf(note) : (note.canvasBackground || DEFAULT_CANVAS_BG);
         openModal('canvasBgModal');
     });
 
@@ -9225,7 +9253,7 @@ RemminStore.ready.then(() => {
     $('canvasBgCustom').addEventListener('input', (e) => {
         const note = noteById(state.currentNoteId);
         if (!note) return;
-        note.canvasBackground = e.target.value;
+        setCanvasBg(note, e.target.value);
         touch(note);
         renderStrokes();
         renderGrid();
@@ -9489,7 +9517,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'animated GIFs, KLIPY GIFs and YouTube / Vimeo videos';
+    const PATCH_NOTE = 'own background colour for Draw and for every grid';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {
@@ -9849,9 +9877,22 @@ RemminStore.ready.then(() => {
             state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
         }
         renderTree();
-        if (stableStringify(noteById(state.currentNoteId) || null) !== before) renderEditor();
+        if (stableStringify(noteById(state.currentNoteId) || null) !== before) {
+            // drawing / painting / dragging right now: redraw the note once you let go
+            if (pointerHeld) pendingEditorRender = true; else renderEditor();
+        }
         if (state.prefs.activeTab === 'calendar') renderCalendar();
     }
+    let pointerHeld = false, pendingEditorRender = false;
+    document.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
+    const pointerReleased = () => {
+        pointerHeld = false;
+        if (!pendingEditorRender) return;
+        pendingEditorRender = false;
+        setTimeout(renderEditor, 0); // after the stroke has been saved
+    };
+    document.addEventListener('pointerup', pointerReleased);
+    document.addEventListener('pointercancel', pointerReleased);
 
     async function fetchRemote() {
         let meta = await githubRequest('GET');

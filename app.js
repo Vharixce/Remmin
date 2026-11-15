@@ -1232,10 +1232,6 @@ RemminStore.ready.then(() => {
 
     function selectNote(id) {
         flushEditor();
-        if (!state.prefs.scheduleCollapsed) {
-            state.prefs.scheduleCollapsed = true;    // "Scheduled" starts folded (its header shows when)
-            savePrefs();
-        }
         state.currentNoteId = id;
         state.currentFolderId = noteById(id)?.folderId || null;
         renderTree();
@@ -3744,8 +3740,12 @@ RemminStore.ready.then(() => {
 
     /* ---------------- planning ---------------- */
 
+    // "Scheduled" is folded whenever a note is opened (also after a reload); it stays open only
+    // for the note you unfolded it in
+    let scheduleOpenFor = null, scheduleNoteShown = null;
     function applyScheduleCollapse() {
-        const collapsed = state.prefs.scheduleCollapsed;
+        if (state.currentNoteId !== scheduleNoteShown) { scheduleNoteShown = state.currentNoteId; scheduleOpenFor = null; } // another note: folded
+        const collapsed = !state.currentNoteId || scheduleOpenFor !== state.currentNoteId;
         // the header says when the note is planned, so it is useful while folded too
         const note = noteById(state.currentNoteId);
         const d = note && parseDate(note.scheduledAt);
@@ -3758,8 +3758,7 @@ RemminStore.ready.then(() => {
 
     $('scheduleHeader').addEventListener('click', (e) => {
         if (e.target.closest('#unscheduleBtn')) return;
-        state.prefs.scheduleCollapsed = !state.prefs.scheduleCollapsed;
-        savePrefs();
+        scheduleOpenFor = scheduleOpenFor === state.currentNoteId ? null : state.currentNoteId;
         applyScheduleCollapse();
     });
 
@@ -9727,7 +9726,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'Heading is now a switch: big letters until you turn it off';
+    const PATCH_NOTE = 'Scheduled is always folded when you open a note';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

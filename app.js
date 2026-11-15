@@ -211,7 +211,7 @@ RemminStore.ready.then(() => {
     const NEW_BRIGHT_RED = '#e11d1d';
     const PALETTE = PALETTE_NAMED.map(([c]) => c);
     const DEFAULT_PEN_COLOR = '#bfbfbf';   // light grey
-    const DEFAULT_CANVAS_BG = '#04130a';   // very dark green
+    const DEFAULT_CANVAS_BG = '#040917';   // very dark blue
 
     const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'];
@@ -9025,7 +9025,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'search bar in the Explorer';
+    const PATCH_NOTE = 'new Draw/Grid notes start on very dark blue';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

@@ -196,20 +196,22 @@ RemminStore.ready.then(() => {
     // [color, name] in display order
     // colours in the order of the light spectrum (red → violet), then magenta / pink, then the greys
     const PALETTE_NAMED = [
-        ['#fca5a5', 'Light red'], ['#e11d1d', 'Bright red'], ['#991b1b', 'Dark red'], ['#2b0808', 'Very dark red'],
-        ['#fdba74', 'Light orange'], ['#f97316', 'Bright orange'], ['#c2410c', 'Dark orange'], ['#2e1505', 'Very dark orange'],
-        ['#facc15', 'Yellow'], ['#2b2405', 'Very dark yellow'],
-        ['#86efac', 'Light green'], ['#22c55e', 'Bright green'], ['#166534', 'Dark green'], ['#082614', 'Very dark green'],
+        ['#fca5a5', 'Light red'], ['#e11d1d', 'Bright red'], ['#991b1b', 'Dark red'], ['#150404', 'Very dark red'],
+        ['#fdba74', 'Light orange'], ['#f97316', 'Bright orange'], ['#c2410c', 'Dark orange'], ['#170a02', 'Very dark orange'],
+        ['#facc15', 'Yellow'], ['#151202', 'Very dark yellow'],
+        ['#86efac', 'Light green'], ['#22c55e', 'Bright green'], ['#166534', 'Dark green'], ['#04130a', 'Very dark green'],
         ['#14b8a6', 'Turquoise'], ['#22d3ee', 'Cyan'],
-        ['#3b82f6', 'Blue'], ['#1e3a8a', 'Dark blue'], ['#08132e', 'Very dark blue'], ['#6366f1', 'Blue-purple'],
-        ['#c4b5fd', 'Light purple'], ['#8b5cf6', 'Purple'], ['#1c0b30', 'Very dark purple'], ['#d946ef', 'Magenta'], ['#f472b6', 'Pink'],
+        ['#3b82f6', 'Blue'], ['#1e3a8a', 'Dark blue'], ['#040917', 'Very dark blue'], ['#6366f1', 'Blue-purple'],
+        ['#c4b5fd', 'Light purple'], ['#8b5cf6', 'Purple'], ['#0e0518', 'Very dark purple'], ['#d946ef', 'Magenta'], ['#f472b6', 'Pink'],
         ['#000000', 'Black'], ['#404040', 'Dark grey'], ['#bfbfbf', 'Light grey'], ['#ffffff', 'White'] // dark grey = 75% black, light grey = 25% black
     ];
+    // the first "very dark" colours were twice as light: drawings that use them get the new ones
+    const OLD_VERY_DARK = { '#2b0808': '#150404', '#2e1505': '#170a02', '#2b2405': '#151202', '#082614': '#04130a', '#08132e': '#040917', '#1c0b30': '#0e0518' };
     const OLD_BRIGHT_RED = '#ef4444'; // the earlier, paler "Bright red"
     const NEW_BRIGHT_RED = '#e11d1d';
     const PALETTE = PALETTE_NAMED.map(([c]) => c);
     const DEFAULT_PEN_COLOR = '#bfbfbf';   // light grey
-    const DEFAULT_CANVAS_BG = '#000000';   // black
+    const DEFAULT_CANVAS_BG = '#04130a';   // very dark green
 
     const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'];
@@ -407,6 +409,14 @@ RemminStore.ready.then(() => {
         note.repeatEndDate = note.repeatEndDate || '';
         note.canvasBackground = note.canvasBackground || DEFAULT_CANVAS_BG;
         note.strokes = Array.isArray(note.strokes) ? note.strokes : [];
+        // the first, lighter "very dark" colours → the new ones
+        if (OLD_VERY_DARK[note.canvasBackground]) note.canvasBackground = OLD_VERY_DARK[note.canvasBackground];
+        note.strokes.forEach((st) => { if (st && OLD_VERY_DARK[st.color]) st.color = OLD_VERY_DARK[st.color]; });
+        if (note.grids && typeof note.grids === 'object') {
+            Object.values(note.grids).forEach((cells) => {
+                if (cells && typeof cells === 'object') Object.keys(cells).forEach((k) => { if (OLD_VERY_DARK[cells[k]]) cells[k] = OLD_VERY_DARK[cells[k]]; });
+            });
+        }
         note.skipDates = Array.isArray(note.skipDates) ? note.skipDates : [];
         if (typeof note.html !== 'string') note.html = textToHtml(note.content);
         note.gridType = note.gridType || 'square';
@@ -6384,6 +6394,8 @@ RemminStore.ready.then(() => {
         return null;
     }
 
+    // new departments take these Draw / Grid colours in turn
+    const DEPT_COLORS = ['#e11d1d', '#3b82f6', '#22c55e', '#f97316', '#8b5cf6', '#facc15', '#14b8a6', '#f472b6', '#22d3ee', '#d946ef'];
     const pjDept = (id) => pj.departments.find((d) => d.id === id);
     const pjPerson = (id) => pj.people.find((p) => p.id === id);
     const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
@@ -6460,7 +6472,7 @@ RemminStore.ready.then(() => {
         const name = input.value.trim().slice(0, 50);
         if (!name) return;
         pjRecord();
-        if (kind === 'dept') pj.departments.push({ id: uid(), name, color: CB_COLORS[(pj.departments.length * 3 + 1) % CB_COLORS.length][0] });
+        if (kind === 'dept') pj.departments.push({ id: uid(), name, color: DEPT_COLORS[pj.departments.length % DEPT_COLORS.length] });
         else pj.people.push({ id: uid(), name });
         input.value = '';
         renderProject();
@@ -6496,7 +6508,7 @@ RemminStore.ready.then(() => {
         const id = row.dataset.dept || row.dataset.person;
         if (e.target.closest('.pj-side-del')) { pjRemoveSide(kind, id); return; }
         if (e.target.closest('.pj-dot')) {
-            showMenu(e.target.closest('.pj-dot'), 'Colour', CB_COLORS.map(([c, name]) => ({
+            showMenu(e.target.closest('.pj-dot'), 'Colour', PALETTE_NAMED.map(([c, name]) => ({
                 label: name,
                 icon: `<span class="pj-dot small" style="background:${c}"></span>`,
                 run: () => { const d = pjDept(id); if (!d) return; pjRecord(); d.color = c; renderProject(); pjSave(); }
@@ -8937,7 +8949,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'multi-colour department stripes, very dark colours, Draw before Project';
+    const PATCH_NOTE = 'darker very dark colours, Draw/Grid colours for departments, very dark green canvas';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

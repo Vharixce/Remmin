@@ -9808,6 +9808,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Holiday stripes: new green colour, twice as wide',
         'Background lines turn gold while a private note is open',
         'Stripes of hidden notes in the Explorer line up perfectly',
         'Hidden-note stripes now cover the whole right side, top bar included',

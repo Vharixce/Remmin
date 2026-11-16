@@ -1426,7 +1426,7 @@ body.voice-dragging, body.voice-dragging * { cursor: grabbing !important; -webki
 
 /* ---------- holidays: dark grey with thin green slanted stripes ---------- */
 :root {
-    --holiday-bg: repeating-linear-gradient(135deg, #3a3d44 0 6px, #235732 6px 7.5px);
+    --holiday-bg: repeating-linear-gradient(135deg, #3a3d44 0 6px, #2E4F37 6px 9px);
 }
 .holiday-chip {
     font-size: 11px; line-height: 1.3; padding: 2px 5px; border-radius: 4px;

@@ -9779,6 +9779,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Hidden-notes button sends out purple waves while on; hidden notes darker',
         'Explorer 📆 button shows ONLY the hidden notes, on a dark striped background',
         'Click the broadcast to see it in full, with the recent updates',
         'Project: eye buttons hide / show the items of a department or person',

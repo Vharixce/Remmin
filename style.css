@@ -2200,10 +2200,25 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .tree-search-clear { right: 50px; }
 .show-hidden-btn { flex-shrink: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 4px 7px; cursor: pointer; font-size: 13px; line-height: 1; filter: grayscale(.6); opacity: .75; }
 .show-hidden-btn:hover { opacity: 1; filter: none; }
-.show-hidden-btn.active { border-color: var(--primary); background: rgba(124, 111, 240, .18); filter: none; opacity: 1; }
+.show-hidden-btn.active { border-color: var(--primary); background: rgba(124, 111, 240, .18); filter: none; opacity: 1; position: relative; animation: show-hidden-ripple 1.8s ease-out infinite; }
+/* purple waves going outwards while only the hidden notes are shown */
+.show-hidden-btn.active::after {
+    content: ''; position: absolute; inset: -1px; border-radius: 8px; pointer-events: none;
+    border: 2px solid rgba(124, 111, 240, .7);
+    animation: show-hidden-wave 1.8s ease-out .9s infinite;
+}
+@keyframes show-hidden-ripple {
+    0% { box-shadow: 0 0 0 0 rgba(124, 111, 240, .6); }
+    100% { box-shadow: 0 0 0 10px rgba(124, 111, 240, 0); }
+}
+@keyframes show-hidden-wave {
+    0% { transform: scale(1); opacity: .9; }
+    100% { transform: scale(1.6); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .show-hidden-btn.active, .show-hidden-btn.active::after { animation-duration: 3.6s; } }
 .note-item.calendar-only,
 .note-item.calendar-only.has-bg {
-    background: repeating-linear-gradient(135deg, #2A2B2E 0 7px, #1b1c1e 7px 14px);
+    background: repeating-linear-gradient(135deg, #202022 0 7px, #141516 7px 14px);
     color: #f1f2f4;
 }
 .note-item.calendar-only:hover { filter: brightness(1.15); }

@@ -9610,6 +9610,14 @@ RemminStore.ready.then(() => {
         const SPEED = 46;                      // px per second
         const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         let W = 0, H = 0, dpr = 1, lines = [], last = 0, running = false;
+        // 0 = normal (white), 1 = gold: while a private note is open the lines turn gold (fading over)
+        let gold = 0;
+        const GOLD = [232, 190, 72];
+        const privateOpen = () => {
+            const n = state.prefs.activeTab !== 'calendar' && noteById(state.currentNoteId);
+            return !!(n && n.private);
+        };
+        const tint = () => GOLD.map((c) => Math.round(255 + (c - 255) * gold)).join(', ');
 
         const nodeXY = (i, j) => ({ x: i * COL, y: j * STEP + (i & 1 ? STEP / 2 : 0) });
         // the six neighbours: 0 up, 1 right-up, 2 right-down, 3 down, 4 left-down, 5 left-up
@@ -9679,6 +9687,8 @@ RemminStore.ready.then(() => {
             if (!running) return;
             const dt = Math.min(0.05, (now - (last || now)) / 1000) * (reduced ? 0.3 : 1);
             last = now;
+            gold += ((privateOpen() ? 1 : 0) - gold) * Math.min(1, dt * 3);
+            const rgb = tint();
             g.clearRect(0, 0, W, H);
             const dots = new Map();
             lines.forEach((l, idx) => {
@@ -9697,7 +9707,7 @@ RemminStore.ready.then(() => {
                     const a = ((pts[k - 1].a + pts[k].a) / 2) * fade;
                     if (a < 0.01) continue;
                     // almost the colour of the background: you barely see the line itself
-                    g.strokeStyle = `rgba(255, 255, 255, ${(a * 0.04).toFixed(3)})`;
+                    g.strokeStyle = `rgba(${rgb}, ${(a * (0.04 + 0.14 * gold)).toFixed(3)})`;
                     g.beginPath();
                     g.moveTo(pts[k - 1].x, pts[k - 1].y);
                     g.lineTo(pts[k].x, pts[k].y);
@@ -9729,7 +9739,7 @@ RemminStore.ready.then(() => {
                 g.arc(x, y, 2, 0, Math.PI * 2);
                 g.fill();
                 // a faint light rim so the dark dot stands out a little on the dark background
-                g.strokeStyle = `rgba(255, 255, 255, ${(v * 0.12).toFixed(3)})`;
+                g.strokeStyle = `rgba(${rgb}, ${(v * (0.12 + 0.28 * gold)).toFixed(3)})`;
                 g.lineWidth = 0.8;
                 g.stroke();
             });
@@ -9798,6 +9808,8 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Background lines turn gold while a private note is open',
+        'Stripes of hidden notes in the Explorer line up perfectly',
         'Hidden-note stripes now cover the whole right side, top bar included',
         'Stripes now also behind the Text / Collage / Draw / Project buttons, not in the writing area',
         'Hidden notes get the striped background in the editor too; private notes show a 🔒 in the title',

@@ -2203,3 +2203,22 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .show-hidden-btn.active { border-color: var(--primary); background: rgba(124, 111, 240, .18); filter: none; opacity: 1; }
 .note-item.calendar-only { opacity: .65; }
 .note-item.calendar-only .hidden-mark { font-size: 11px; }
+
+/* Project: eye to hide / show the items of a department or person */
+.pj-eye { background: none; border: 0; color: var(--text-dim); cursor: pointer; padding: 2px 3px; border-radius: 4px; display: inline-flex; align-items: center; }
+.pj-eye:hover { color: var(--text); background: rgba(255, 255, 255, .08); }
+.pj-eye.off { color: #f59e0b; }
+.pj-side-item:has(.pj-eye.off) .pj-side-name { opacity: .5; text-decoration: line-through; }
+
+/* popup when the broadcast is clicked */
+.broadcast { cursor: pointer; }
+.broadcast:focus-visible { outline: 2px solid var(--accent, #8b5cf6); outline-offset: 2px; }
+.broadcast-info { width: min(460px, 92vw); max-width: 460px; }
+.broadcast-info .bi-text { font-size: 16px; font-weight: 600; line-height: 1.4; padding: 12px 14px; margin: 4px 0 12px; border-radius: 8px; background: rgba(255, 255, 255, .05); word-break: break-word; }
+.broadcast-info .bi-row { display: flex; justify-content: space-between; gap: 16px; padding: 6px 2px; border-bottom: 1px solid rgba(255, 255, 255, .06); font-size: 13px; }
+.broadcast-info .bi-row span { color: var(--text-dim); flex-shrink: 0; }
+.broadcast-info .bi-row b { font-weight: 500; text-align: right; }
+.broadcast-info .bi-head { margin: 14px 2px 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
+.broadcast-info .bi-list { margin: 0; padding-left: 22px; font-size: 13px; line-height: 1.6; max-height: 220px; overflow: auto; }
+.broadcast-info .bi-list li.new { font-weight: 600; }
+.broadcast-info .bi-list li.new::after { content: 'new'; margin-left: 8px; padding: 0 6px; border-radius: 6px; font-size: 10px; font-weight: 700; background: #7c3aed; color: #fff; vertical-align: middle; }

@@ -86,7 +86,7 @@
                     <button class="tab" id="tabCalendar">Calendar</button>
                 </div>
                 <div class="broadcast-slot">
-                    <div class="broadcast" id="broadcast" aria-live="off" hidden>
+                    <div class="broadcast" id="broadcast" aria-live="off" role="button" tabindex="0" title="Click for details" hidden>
                         <div class="broadcast-track" id="broadcastTrack"></div>
                     </div>
                 </div>
@@ -446,6 +446,19 @@
                 <button class="btn" id="planFromTreeCancel">Cancel</button>
                 <button class="btn btn-primary" id="planFromTreeSave">Save</button>
             </div>
+        </div>
+    </div>
+
+    <div class="modal" id="broadcastInfoModal">
+        <div class="modal-backdrop" id="broadcastInfoBackdrop"></div>
+        <div class="modal-content broadcast-info">
+            <div class="modal-header">
+                <div>📣 Broadcast</div>
+                <button class="icon-btn" id="broadcastInfoClose" title="Close">&times;</button>
+            </div>
+            <div class="bi-text" id="broadcastInfoText"></div>
+            <div id="broadcastInfoDetails"></div>
+            <div class="modal-actions"><button class="btn" id="broadcastInfoEdit" type="button">Edit text (Admin Panel)</button></div>
         </div>
     </div>
 

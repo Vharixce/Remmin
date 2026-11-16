@@ -6912,19 +6912,21 @@ RemminStore.ready.then(() => {
         pj.columns = Array.isArray(saved.columns) ? saved.columns : pjDefault();
         pj.people = Array.isArray(saved.people) ? saved.people : [];
         pj.departments = Array.isArray(saved.departments) ? saved.departments : [];
+        pj.hidden = saved.hidden && typeof saved.hidden === 'object' ? { depts: saved.hidden.depts || [], people: saved.hidden.people || [] } : { depts: [], people: [] };
         pj.undo = []; pj.redo = []; pj.editing = null; pj.sel = new Set();
         renderProject();
     }
     function pjSave() {
         const note = noteById(pj.noteId);
         if (!note || isPrivateLocked(note)) return;
-        note.project = JSON.parse(JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments }));
+        note.project = JSON.parse(JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments, hidden: pj.hidden }));
         touch(note);
     }
-    const pjState = () => JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments });
+    const pjState = () => JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments, hidden: pj.hidden });
     function pjRestore(text) {
         const v = JSON.parse(text);
         pj.columns = v.columns; pj.people = v.people || []; pj.departments = v.departments || [];
+        pj.hidden = v.hidden || { depts: [], people: [] };
     }
     function pjRecord() {
         pj.undo.push(pjState());
@@ -6979,18 +6981,28 @@ RemminStore.ready.then(() => {
                     </div>`;
     }
 
+    // the eye: hide / show all items with this department or person
+    const EYE = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+    const EYE_OFF = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/></svg>';
+    const pjHiddenDept = (id) => (pj.hidden.depts || []).includes(id);
+    const pjHiddenPerson = (id) => (pj.hidden.people || []).includes(id);
+    const pjShown = (card) => !(card.depts || []).some(pjHiddenDept) && !(card.people || []).some(pjHiddenPerson);
+    const eyeBtn = (hidden, name) => `<button type="button" class="pj-eye${hidden ? ' off' : ''}" title="${hidden ? 'Show' : 'Hide'} the items of ${escapeHtml(name)}" aria-pressed="${hidden}">${hidden ? EYE_OFF : EYE}</button>`;
+
     // the small lists on the right: departments (with a colour) and people
     function renderProjectSide() {
         $('pjDeptList').innerHTML = pj.departments.length ? pj.departments.map((d) => `
             <div class="pj-side-item" data-dept="${d.id}">
                 <button type="button" class="pj-dot" style="background:${escapeHtml(d.color)}" title="Change colour"></button>
                 <span class="pj-side-name" title="Double-click to rename">${escapeHtml(d.name)}</span>
+                ${eyeBtn(pjHiddenDept(d.id), d.name)}
                 <button type="button" class="pj-side-del" title="Remove">✕</button>
             </div>`).join('') : '<div class="pj-side-empty">e.g. Art department</div>';
         $('pjPeopleList').innerHTML = pj.people.length ? pj.people.map((p) => `
             <div class="pj-side-item" data-person="${p.id}">
                 <span class="pj-avatar">${escapeHtml(initials(p.name))}</span>
                 <span class="pj-side-name" title="Double-click to rename">${escapeHtml(p.name)}</span>
+                ${eyeBtn(pjHiddenPerson(p.id), p.name)}
                 <button type="button" class="pj-side-del" title="Remove">✕</button>
             </div>`).join('') : '<div class="pj-side-empty">Add the people who work on this</div>';
     }
@@ -7070,6 +7082,17 @@ RemminStore.ready.then(() => {
         const kind = row.dataset.dept ? 'dept' : 'person';
         const id = row.dataset.dept || row.dataset.person;
         if (e.target.closest('.pj-side-del')) { pjRemoveSide(kind, id); return; }
+        if (e.target.closest('.pj-eye')) {
+            if (pj.editing && pj.editFinish) pj.editFinish(true);
+            const key = kind === 'dept' ? 'depts' : 'people';
+            const list = new Set(pj.hidden[key] || []);
+            if (list.has(id)) list.delete(id); else list.add(id);
+            pj.hidden = { ...pj.hidden, [key]: [...list] };
+            pj.sel = new Set();
+            renderProject();
+            pjSave();
+            return;
+        }
         if (e.target.closest('.pj-dot')) {
             showMenu(e.target.closest('.pj-dot'), 'Colour', PALETTE_NAMED.map(([c, name]) => ({
                 label: name,
@@ -7095,10 +7118,10 @@ RemminStore.ready.then(() => {
             <div class="pj-col" data-col="${col.id}">
                 <div class="pj-col-head">
                     <span class="pj-col-name" title="Double-click to rename">${escapeHtml(col.name)}</span>
-                    <span class="pj-count">${col.cards.length}</span>
+                    <span class="pj-count" title="${col.cards.filter(pjShown).length === col.cards.length ? '' : `${col.cards.length - col.cards.filter(pjShown).length} hidden`}">${col.cards.filter(pjShown).length === col.cards.length ? col.cards.length : `${col.cards.filter(pjShown).length}/${col.cards.length}`}</span>
                     <button type="button" class="pj-col-menu" title="Column options" aria-label="Column options">⋯</button>
                 </div>
-                <div class="pj-cards">${col.cards.map(pjCardHtml).join('')}</div>
+                <div class="pj-cards">${col.cards.filter(pjShown).map(pjCardHtml).join('')}</div>
                 <button type="button" class="pj-add-card">+ Add item</button>
             </div>`).join('') +
             '<button type="button" class="pj-add-col" id="pjAddCol">+ Add column</button>';
@@ -7340,6 +7363,10 @@ RemminStore.ready.then(() => {
             const list = d.holder.closest('.pj-cards');
             const colId = list && list.closest('.pj-col').dataset.col;
             const index = list ? [...list.children].filter((c) => c === d.holder || (c.classList.contains('pj-card') && !c.classList.contains('pj-hidden'))).indexOf(d.holder) : -1;
+            // the item shown right after the drop place (hidden items are not on screen)
+            let nextEl = d.holder.nextElementSibling;
+            while (nextEl && (!nextEl.classList.contains('pj-card') || nextEl.classList.contains('pj-hidden'))) nextEl = nextEl.nextElementSibling;
+            const nextId = nextEl ? nextEl.dataset.card : null;
             const f = pjFindCard(d.id);
             const moved = d.group.length > 1 || (f && !(f.col.id === colId && f.i === index));
             if (f && colId && index >= 0 && moved) {
@@ -7348,7 +7375,9 @@ RemminStore.ready.then(() => {
                 const order = [];
                 pj.columns.forEach((c) => c.cards.forEach((k) => { if (d.group.includes(k.id)) order.push(k); }));
                 pj.columns.forEach((c) => { c.cards = c.cards.filter((k) => !d.group.includes(k.id)); });
-                pjCol(colId).cards.splice(index, 0, ...order);
+                const target = pjCol(colId).cards;
+                const at = nextId ? target.findIndex((k) => k.id === nextId) : -1;
+                target.splice(at >= 0 ? at : target.length, 0, ...order);
                 pjSave();
             }
             if (d.group.length > 1) pj.sel = new Set(); // moved together: done with this selection
@@ -9741,7 +9770,20 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = '📆 button next to search shows the notes hidden in the Explorer';
+    // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
+    const PATCH_HISTORY = [
+        'Click the broadcast to see it in full, with the recent updates',
+        'Project: eye buttons hide / show the items of a department or person',
+        '📆 button next to search shows the notes hidden in the Explorer',
+        'Scheduled block starts folded for every note',
+        'Heading works as an on / off switch in Text and Collage',
+        'Scale handle for multi-selected pictures and items',
+        'Draw and every grid keep their own background colour',
+        'GIFs, YouTube / Vimeo videos and KLIPY GIFs in Text and Collage',
+        'Picture sizes 1/8, 1/4, 1/2 and Full, Shift-click to select several',
+        'Explorer search bar',
+    ];
+    const PATCH_NOTE = PATCH_HISTORY[0];
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {
@@ -9761,6 +9803,24 @@ RemminStore.ready.then(() => {
         const halfWidth = track.scrollWidth / 2 || 200;
         track.style.setProperty('--broadcast-time', `${Math.max(6, halfWidth / 40)}s`); // about 40 px per second
     }
+    // click the broadcast: a popup with the full text and the recent updates
+    function openBroadcastInfo() {
+        const text = broadcastText().replace(/XXX/g, PATCH_NOTE).trim();
+        const version = (text.match(/Remmin\s*v?(\d+(?:\.\d+)*)/i) || [])[1];
+        $('broadcastInfoText').textContent = text;
+        $('broadcastInfoDetails').innerHTML = `
+            <div class="bi-row"><span>Version</span><b>${escapeHtml(version ? `Remmin ${version}` : 'Remmin')}</b></div>
+            <div class="bi-row"><span>Latest update</span><b>${escapeHtml(PATCH_NOTE)}</b></div>
+            <div class="bi-row"><span>Synced to</span><b>${escapeHtml([githubConfigured() ? 'GitHub' : '', serverConfigured() ? 'Server' : ''].filter(Boolean).join(' + ') || 'only this device')}</b></div>
+            <div class="bi-head">Recent updates</div>
+            <ol class="bi-list">${PATCH_HISTORY.map((p, i) => `<li${i === 0 ? ' class="new"' : ''}>${escapeHtml(p)}</li>`).join('')}</ol>`;
+        openModal('broadcastInfoModal');
+    }
+    $('broadcast').addEventListener('click', openBroadcastInfo);
+    $('broadcast').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBroadcastInfo(); } });
+    $('broadcastInfoClose').addEventListener('click', closeModals);
+    $('broadcastInfoBackdrop').addEventListener('click', closeModals);
+    $('broadcastInfoEdit').addEventListener('click', () => { closeModals(); openSettings('admin'); });
     $('broadcastSave').addEventListener('click', () => {
         state.prefs.broadcast = $('broadcastInput').value.trim();
         settingsChanged();

@@ -2226,8 +2226,12 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 /* the open note when it is "Show ONLY in Calendar": same stripes as in the Explorer */
 #viewNote.calendar-only-note { background: repeating-linear-gradient(135deg, #202022 0 7px, #141516 7px 14px); }
 #viewNote.calendar-only-note .editor-header,
-#viewNote.calendar-only-note .rich-editor,
+#viewNote.calendar-only-note .mode-toggle { background: transparent; }
+#viewNote.calendar-only-note .editor-toolbar { background: repeating-linear-gradient(135deg, #202022 0 7px, #141516 7px 14px); -webkit-backdrop-filter: none; backdrop-filter: none; }
+
 #viewNote.calendar-only-note .title-input { background: transparent; }
+/* the writing area of Text and the Project board keep their normal plain background */
+#viewNote.calendar-only-note .project-board { background: var(--bg); border-radius: 10px; padding: 8px; }
 .hidden-empty { padding: 14px 10px; font-size: 13px; color: var(--text-dim); text-align: center; }
 .note-item.calendar-only .hidden-mark { font-size: 11px; }
 

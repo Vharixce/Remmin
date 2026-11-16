@@ -1657,6 +1657,11 @@ RemminStore.ready.then(() => {
     $('privateLockInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); unlockCurrent(); } });
     $('privateLockNoPass').addEventListener('click', () => openSettings('pass'));
 
+    // the striped background over the whole right side, while a "Show ONLY in Calendar" note is open
+    function updateMainStripes() {
+        const view = $('viewNote');
+        document.querySelector('.main').classList.toggle('calendar-only-main', view.classList.contains('calendar-only-note') && view.style.display !== 'none');
+    }
     function updateCalendarOnlyBtn(note) {
         const btn = $('calendarOnlyBtn');
         btn.disabled = !note;
@@ -1664,6 +1669,7 @@ RemminStore.ready.then(() => {
         btn.classList.toggle('active', on);
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
         $('viewNote').classList.toggle('calendar-only-note', on);
+        updateMainStripes();
         btn.title = on ? 'Shown ONLY in Calendar (hidden in Explorer). Click to show it in the Explorer again.'
             : 'Show ONLY in Calendar (hidden in Explorer)';
     }
@@ -4211,6 +4217,7 @@ RemminStore.ready.then(() => {
         $('tabCalendar').classList.toggle('active', tab === 'calendar');
         $('viewNote').style.display = tab === 'note' ? 'flex' : 'none';
         $('viewCalendar').style.display = tab === 'calendar' ? 'flex' : 'none';
+        updateMainStripes();
         applyCalendarMode(); // the calendar, or the world clocks
     }
 
@@ -9791,6 +9798,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Hidden-note stripes now cover the whole right side, top bar included',
         'Stripes now also behind the Text / Collage / Draw / Project buttons, not in the writing area',
         'Hidden notes get the striped background in the editor too; private notes show a 🔒 in the title',
         'Hidden-notes button sends out purple waves while on; hidden notes darker',

@@ -2224,10 +2224,13 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .note-item.calendar-only:hover { filter: brightness(1.15); }
 .note-item.calendar-only .note-item-meta { color: #d4d6da; }
 /* the open note when it is "Show ONLY in Calendar": same stripes as in the Explorer */
-#viewNote.calendar-only-note { background: repeating-linear-gradient(135deg, #202022 0 7px, #141516 7px 14px); }
-#viewNote.calendar-only-note .editor-header,
-#viewNote.calendar-only-note .mode-toggle { background: transparent; }
-#viewNote.calendar-only-note .editor-toolbar { background: repeating-linear-gradient(135deg, #202022 0 7px, #141516 7px 14px); -webkit-backdrop-filter: none; backdrop-filter: none; }
+/* the stripes cover the whole right side (top bar included); fixed, so every striped part lines up */
+.main.calendar-only-main,
+.main.calendar-only-main #viewNote .editor-toolbar {
+    background: repeating-linear-gradient(135deg, #202022 0 7px, #141516 7px 14px) fixed;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+#viewNote.calendar-only-note .editor-header { background: transparent; }
 
 #viewNote.calendar-only-note .title-input { background: transparent; }
 /* the writing area of Text and the Project board keep their normal plain background */

@@ -720,9 +720,9 @@ RemminStore.ready.then(() => {
                 : ` · ${formatDateTime(note.scheduledAt)}`;
         }
         const bg = note.bgColor ? ` style="${bgStyle(note.bgColor)}"` : '';
-        return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}${note.bgColor ? ' has-bg' : ''}" data-note-id="${note.id}"${bg}>
+        return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}${note.bgColor ? ' has-bg' : ''}${note.calendarOnly ? ' calendar-only' : ''}" data-note-id="${note.id}"${bg}>
             <button class="more-btn tree-menu-btn note-more" data-note-id="${note.id}" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu">☰</button>
-            <div class="note-item-title">${escapeHtml(note.title.trim() || 'Untitled')}</div>
+            <div class="note-item-title">${note.calendarOnly ? '<span class="hidden-mark" title="Only in Calendar (hidden in Explorer)">📆</span> ' : ''}${escapeHtml(note.title.trim() || 'Untitled')}</div>
             <div class="note-item-meta">${escapeHtml(preview)}${meta}</div>
         </div>`;
     }
@@ -772,6 +772,19 @@ RemminStore.ready.then(() => {
         if (e.key === 'Escape') { searchInput.value = ''; $('treeSearchClear').hidden = true; renderTree(); searchInput.blur(); }
         else if (e.key === 'Enter') { const first = treeEl.querySelector('.note-item'); if (first) first.click(); }
     });
+    // 📆 next to the search bar: also list the notes that are hidden in the Explorer
+    function updateShowHiddenBtn() {
+        const on = !!state.prefs.showHiddenNotes;
+        $('showHiddenBtn').classList.toggle('active', on);
+        $('showHiddenBtn').setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    $('showHiddenBtn').addEventListener('click', () => {
+        state.prefs.showHiddenNotes = !state.prefs.showHiddenNotes;
+        savePrefs();
+        updateShowHiddenBtn();
+        renderTree();
+    });
+    updateShowHiddenBtn();
     $('treeSearchClear').addEventListener('click', () => { searchInput.value = ''; $('treeSearchClear').hidden = true; renderTree(); searchInput.focus(); });
 
     function renderTree() {
@@ -779,10 +792,12 @@ RemminStore.ready.then(() => {
         if (searchInput.value.trim()) { renderSearch(searchInput.value); return; }
         treeEl.innerHTML = '';
         // notes set to "Show ONLY in Calendar" are not listed here
-        const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId && !n.calendarOnly));
+        // 📆 notes (only in the Calendar) are left out, unless "show hidden" is on
+        const listed = (n) => !n.calendarOnly || state.prefs.showHiddenNotes;
+        const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId && listed(n)));
 
         const folderHtml = (folder) => {
-            const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id && !n.calendarOnly));
+            const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id && listed(n)));
             const subs = childFolders(folder.id);
             const expanded = state.prefs.expandedFolders.includes(folder.id);
             const inner = subs.map(folderHtml).join('') + notes.map(noteItemHtml).join('');
@@ -9726,7 +9741,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'Scheduled is always folded when you open a note';
+    const PATCH_NOTE = '📆 button next to search shows the notes hidden in the Explorer';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

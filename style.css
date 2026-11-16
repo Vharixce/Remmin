@@ -2193,3 +2193,13 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 }
 .img-scale-handle { position: fixed; z-index: 60; width: 14px; height: 14px; background: #fff; border: 2px solid var(--primary); border-radius: 3px; cursor: nwse-resize; touch-action: none; }
 .img-scale-handle[hidden] { display: none; }
+
+/* 📆 next to the search bar */
+.tree-search { display: flex; align-items: center; gap: 6px; }
+.tree-search input { flex: 1; min-width: 0; }
+.tree-search-clear { right: 50px; }
+.show-hidden-btn { flex-shrink: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 4px 7px; cursor: pointer; font-size: 13px; line-height: 1; filter: grayscale(.6); opacity: .75; }
+.show-hidden-btn:hover { opacity: 1; filter: none; }
+.show-hidden-btn.active { border-color: var(--primary); background: rgba(124, 111, 240, .18); filter: none; opacity: 1; }
+.note-item.calendar-only { opacity: .65; }
+.note-item.calendar-only .hidden-mark { font-size: 11px; }

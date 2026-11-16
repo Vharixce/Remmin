@@ -2223,6 +2223,11 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 }
 .note-item.calendar-only:hover { filter: brightness(1.15); }
 .note-item.calendar-only .note-item-meta { color: #d4d6da; }
+/* the open note when it is "Show ONLY in Calendar": same stripes as in the Explorer */
+#viewNote.calendar-only-note { background: repeating-linear-gradient(135deg, #202022 0 7px, #141516 7px 14px); }
+#viewNote.calendar-only-note .editor-header,
+#viewNote.calendar-only-note .rich-editor,
+#viewNote.calendar-only-note .title-input { background: transparent; }
 .hidden-empty { padding: 14px 10px; font-size: 13px; color: var(--text-dim); text-align: center; }
 .note-item.calendar-only .hidden-mark { font-size: 11px; }
 

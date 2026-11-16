@@ -430,6 +430,9 @@ RemminStore.ready.then(() => {
         note.gridType = note.gridType || 'square';
         note.grids = note.grids && typeof note.grids === 'object' ? note.grids : {};
         note.private = !!note.private;
+        // private notes show a 🔒 at the start of their title (like memos show 📝)
+        if (note.private && !/^(?:📝\s*)?🔒/u.test((note.title || '').trim())) note.title = `🔒 ${(note.title || '').trim()}`.trim();
+        if (note.private) note.title = note.title.replace(/^📝\s*🔒\s*/u, '🔒 📝 ');
     }
 
     let syncReady = false; // set once the sync code below has loaded
@@ -1660,6 +1663,7 @@ RemminStore.ready.then(() => {
         const on = !!(note && note.calendarOnly);
         btn.classList.toggle('active', on);
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        $('viewNote').classList.toggle('calendar-only-note', on);
         btn.title = on ? 'Shown ONLY in Calendar (hidden in Explorer). Click to show it in the Explorer again.'
             : 'Show ONLY in Calendar (hidden in Explorer)';
     }
@@ -1683,7 +1687,12 @@ RemminStore.ready.then(() => {
      * In the month view a day only shows one small 📝 for all its memos; click the day to see them.
      * Memo notes always start their title with 📝. */
     const MEMO = '📝';
-    const memoTitle = (title) => `${MEMO} ${title.replace(/^📝\s*/u, '').trim()}`.trim();
+    const LOCK = '🔒';
+    // the title with its marks in front: 🔒 for private, 📝 for memo
+    const markTitle = (note, title) => {
+        const base = String(title || '').replace(/^(?:[🔒📝]\s*)+/u, '').trim();
+        return `${note.private ? `${LOCK} ` : ''}${note.memo ? `${MEMO} ` : ''}${base}`.trim();
+    };
     function updateMemoBtn(note) {
         const btn = $('memoBtn');
         btn.disabled = !note;
@@ -1699,8 +1708,8 @@ RemminStore.ready.then(() => {
         if (!note || isPrivateLocked(note)) return;
         flushEditor();
         note.memo = !note.memo;
-        if (note.memo) note.title = memoTitle(note.title);
-        else { delete note.memo; note.title = note.title.replace(/^📝\s*/u, ''); }
+        if (!note.memo) delete note.memo;
+        note.title = markTitle(note, note.title);
         $('noteTitle').value = note.title;
         touch(note);
         updateMemoBtn(note);
@@ -1730,7 +1739,10 @@ RemminStore.ready.then(() => {
         flushEditor();
         note.private = !note.private;
         if (note.private) unlockedNoteId = note.id; // stays open until you open it again
+        note.title = markTitle(note, note.title);
+        $('noteTitle').value = note.title;
         touch(note);
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
         updatePrivateBtn(note);
         updateCalendarOnlyBtn(note);
         updateMemoBtn(note);
@@ -1772,7 +1784,7 @@ RemminStore.ready.then(() => {
         const note = noteById(state.currentNoteId);
         if (!note || isPrivateLocked(note)) return;
         let title = $('noteTitle').value;
-        if (note.memo && !/^📝/u.test(title.trim())) { title = memoTitle(title); $('noteTitle').value = title; } // memos keep their 📝
+        if ((note.memo || note.private) && markTitle(note, title) !== title.trim()) { title = markTitle(note, title); $('noteTitle').value = title; } // memos keep their 📝, private notes their 🔒
         let html = note.html;
         let content = note.content;
         if (textDirty) {
@@ -4301,7 +4313,7 @@ RemminStore.ready.then(() => {
                         <button class="folder-action-btn note-rename" data-note-id="${n.id}" title="Rename note">Rename</button>
                         <button class="folder-action-btn folder-delete note-delete" data-note-id="${n.id}" title="Delete note">Delete</button>
                     </span>
-                    <div>${escapeHtml(n.memo ? memoTitle(n.title) : (n.title.trim() || 'Untitled'))}</div>
+                    <div>${escapeHtml(markTitle(n, n.title) || 'Untitled')}</div>
                     <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' · alarm' : ''}${n.emailEnabled ? ' · email' : ''}${isRecurring(n) ? ' · ' + repeatSummary(n) : ''}</div>
                 </div>`).join('')
             : (holidays.length ? '' : '<div class="calendar-hint">No notes scheduled for this day.</div>'));
@@ -9779,6 +9791,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Hidden notes get the striped background in the editor too; private notes show a 🔒 in the title',
         'Hidden-notes button sends out purple waves while on; hidden notes darker',
         'Explorer 📆 button shows ONLY the hidden notes, on a dark striped background',
         'Click the broadcast to see it in full, with the recent updates',

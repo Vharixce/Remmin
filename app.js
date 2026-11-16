@@ -772,11 +772,12 @@ RemminStore.ready.then(() => {
         if (e.key === 'Escape') { searchInput.value = ''; $('treeSearchClear').hidden = true; renderTree(); searchInput.blur(); }
         else if (e.key === 'Enter') { const first = treeEl.querySelector('.note-item'); if (first) first.click(); }
     });
-    // 📆 next to the search bar: also list the notes that are hidden in the Explorer
+    // 📆 next to the search bar: list ONLY the notes that are hidden in the Explorer
     function updateShowHiddenBtn() {
         const on = !!state.prefs.showHiddenNotes;
         $('showHiddenBtn').classList.toggle('active', on);
         $('showHiddenBtn').setAttribute('aria-pressed', on ? 'true' : 'false');
+        treeEl.classList.toggle('only-hidden', on);
     }
     $('showHiddenBtn').addEventListener('click', () => {
         state.prefs.showHiddenNotes = !state.prefs.showHiddenNotes;
@@ -791,15 +792,18 @@ RemminStore.ready.then(() => {
         ensureNoteOrder();
         if (searchInput.value.trim()) { renderSearch(searchInput.value); return; }
         treeEl.innerHTML = '';
-        // notes set to "Show ONLY in Calendar" are not listed here
-        // 📆 notes (only in the Calendar) are left out, unless "show hidden" is on
-        const listed = (n) => !n.calendarOnly || state.prefs.showHiddenNotes;
+        // 📆 notes (only in the Calendar) are left out; with "show hidden" on, ONLY those are listed
+        const onlyHidden = !!state.prefs.showHiddenNotes;
+        const listed = (n) => (onlyHidden ? !!n.calendarOnly : !n.calendarOnly);
         const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId && listed(n)));
+        // in "only hidden" mode: skip folders without hidden notes, and open the rest
+        const hasListed = (folderId) => state.notes.some((n) => n.folderId === folderId && listed(n)) || childFolders(folderId).some((f) => hasListed(f.id));
 
         const folderHtml = (folder) => {
+            if (onlyHidden && !hasListed(folder.id)) return '';
             const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id && listed(n)));
             const subs = childFolders(folder.id);
-            const expanded = state.prefs.expandedFolders.includes(folder.id);
+            const expanded = onlyHidden || state.prefs.expandedFolders.includes(folder.id);
             const inner = subs.map(folderHtml).join('') + notes.map(noteItemHtml).join('');
             return `<div class="folder">
                 <div class="folder-header${folder.bgColor ? ' has-bg' : ''}" data-folder-id="${folder.id}" draggable="true" title="Drag to reorder, or onto another folder to put it inside"${folder.bgColor ? ` style="${bgStyle(folder.bgColor)}"` : ''}>
@@ -813,8 +817,11 @@ RemminStore.ready.then(() => {
         };
         treeEl.innerHTML = childFolders(null).map(folderHtml).join('');
 
+        if (onlyHidden && !treeEl.innerHTML.trim() && !unfiled.length) {
+            treeEl.innerHTML = '<div class="hidden-empty">No hidden notes. Use the 📆 button in a note to hide it from the Explorer.</div>';
+        }
         if (unfiled.length) {
-            const expanded = state.prefs.expandedFolders.includes('__none');
+            const expanded = onlyHidden || state.prefs.expandedFolders.includes('__none');
             const group = document.createElement('div');
             group.className = 'folder';
             group.innerHTML = `
@@ -9772,6 +9779,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Explorer 📆 button now shows ONLY the hidden notes, with a striped background',
         'Click the broadcast to see it in full, with the recent updates',
         'Project: eye buttons hide / show the items of a department or person',
         '📆 button next to search shows the notes hidden in the Explorer',

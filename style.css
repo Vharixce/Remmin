@@ -2201,7 +2201,14 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .show-hidden-btn { flex-shrink: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 4px 7px; cursor: pointer; font-size: 13px; line-height: 1; filter: grayscale(.6); opacity: .75; }
 .show-hidden-btn:hover { opacity: 1; filter: none; }
 .show-hidden-btn.active { border-color: var(--primary); background: rgba(124, 111, 240, .18); filter: none; opacity: 1; }
-.note-item.calendar-only { opacity: .65; }
+.note-item.calendar-only,
+.note-item.calendar-only.has-bg {
+    background: repeating-linear-gradient(135deg, #5a5d63 0 7px, #34363a 7px 14px);
+    color: #f1f2f4;
+}
+.note-item.calendar-only:hover { filter: brightness(1.15); }
+.note-item.calendar-only .note-item-meta { color: #d4d6da; }
+.hidden-empty { padding: 14px 10px; font-size: 13px; color: var(--text-dim); text-align: center; }
 .note-item.calendar-only .hidden-mark { font-size: 11px; }
 
 /* Project: eye to hide / show the items of a department or person */

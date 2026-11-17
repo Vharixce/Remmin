@@ -330,7 +330,34 @@ RemminStore.ready.then(() => {
         return `media:${id}`;
     }
     function isMediaRef(v) { return typeof v === 'string' && /^media:[a-z0-9]{4,40}$/.test(v); }
-    function mediaData(ref) { return isMediaRef(ref) ? (state.media[ref.slice(6)] || '') : ''; }
+    function mediaData(ref) {
+        if (!isMediaRef(ref)) return '';
+        const id = ref.slice(6);
+        if (!state.media[id] && state.mediaGone && state.mediaGone[id]) { // used again (undo): keep it after all
+            state.media[id] = state.mediaGone[id];
+            delete state.mediaGone[id];
+            scheduleSaveMedia();
+        }
+        return state.media[id] || '';
+    }
+    // a little after every save: videos no note uses any more are removed from the storage
+    // (kept in memory for this visit, so undo can still bring them back)
+    function scheduleMediaGc() {
+        clearTimeout(state.mediaGcTimer);
+        state.mediaGcTimer = setTimeout(() => {
+            state.mediaGone = state.mediaGone || {};
+            const all = { ...state.mediaGone, ...state.media };
+            const kept = pickMedia(all, state.notes, state.trash);
+            const before = Object.keys(state.media).join();
+            Object.keys(all).forEach((k) => {
+                if (kept[k]) { state.media[k] = all[k]; delete state.mediaGone[k]; } else { state.mediaGone[k] = all[k]; delete state.media[k]; }
+            });
+            if (Object.keys(state.media).join() !== before) {
+                scheduleSaveMedia();
+                if (typeof updateStorageMeters === 'function') setTimeout(updateStorageMeters, 800);
+            }
+        }, 2500);
+    }
     function scheduleSaveMedia() {
         clearTimeout(state.mediaTimer);
         state.mediaTimer = setTimeout(() => writeJSON(STORAGE.media, state.media), 400);
@@ -513,6 +540,7 @@ RemminStore.ready.then(() => {
     }
     const saveNotes = () => {
         writeJSON(STORAGE.notes, state.notes);
+        scheduleMediaGc();
         markChanged();
         scheduleGithubSave();
     };
@@ -1410,6 +1438,7 @@ RemminStore.ready.then(() => {
         state.trash = state.trash.filter((t) => (Date.parse(t.deletedAt) || 0) > cutoff).slice(0, 100);
         writeJSON(STORAGE.trash, state.trash);
         writeJSON(STORAGE.trashGone, state.trashGone);
+        scheduleMediaGc();
         updateTrashButton();
         if (changed) { markChanged(); scheduleGithubSave(); } // the trash is synced too
     }
@@ -1561,6 +1590,8 @@ RemminStore.ready.then(() => {
         // opening another note locks a private note again
         if ((note ? note.id : null) !== lastEditorNoteId) unlockedNoteId = null;
         lastEditorNoteId = note ? note.id : null;
+        // the pass screen never gets the "Show ONLY in Calendar" stripes
+        if (isPrivateLocked(note)) { $('viewNote').classList.remove('calendar-only-note'); updateMainStripes(); }
         if (showPrivateLock(note)) return;
 
         $('noteTitle').disabled = empty;
@@ -1626,7 +1657,9 @@ RemminStore.ready.then(() => {
             return {
                 image: s.image, x: s.x, y: s.y, w: s.w, h: s.h, points: [], ...(s.fill ? { fill: true } : {}),
                 ...(typeof s.video === 'string' && /^(?:media:[a-z0-9]{4,40}$|data:video\/[\w.+-]+;base64,)/i.test(s.video.slice(0, 80)) ? { video: s.video } : {}),
-                ...(s.video && s.muted ? { muted: true } : {})
+                ...(s.video && s.muted ? { muted: true } : {}),
+                ...(s.video && s.loop === false ? { loop: false } : {}),
+                ...(s.video && typeof s.volume === 'number' && s.volume >= 0 && s.volume < 1 ? { volume: s.volume } : {})
             };
         }
         return {
@@ -1734,7 +1767,8 @@ RemminStore.ready.then(() => {
     // the striped background over the whole right side, while a "Show ONLY in Calendar" note is open
     function updateMainStripes() {
         const view = $('viewNote');
-        document.querySelector('.main').classList.toggle('calendar-only-main', view.classList.contains('calendar-only-note') && view.style.display !== 'none');
+        document.querySelector('.main').classList.toggle('calendar-only-main', view.classList.contains('calendar-only-note') && view.style.display !== 'none'
+            && !isPrivateLocked(noteById(state.currentNoteId)));
     }
     function updateCalendarOnlyBtn(note) {
         const btn = $('calendarOnlyBtn');
@@ -1742,7 +1776,7 @@ RemminStore.ready.then(() => {
         const on = !!(note && note.calendarOnly);
         btn.classList.toggle('active', on);
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-        $('viewNote').classList.toggle('calendar-only-note', on);
+        $('viewNote').classList.toggle('calendar-only-note', on && !isPrivateLocked(note));
         updateMainStripes();
         btn.title = on ? 'Shown ONLY in Calendar (hidden in Explorer). Click to show it in the Explorer again.'
             : 'Show ONLY in Calendar (hidden in Explorer)';
@@ -2846,6 +2880,8 @@ RemminStore.ready.then(() => {
         // a video copied with "Copy video"
         const copiedVid = pastedVideoRef(e);
         if (copiedVid) { e.preventDefault(); insertVideoInText(copiedVid); return; }
+        const copiedAud = pastedAudio(e);
+        if (copiedAud) { e.preventDefault(); insertVoiceChip(copiedAud.src, copiedAud.name, copiedAud.duration, copiedAud.loop); return; }
         // a YouTube / Vimeo link on its own: embed the video
         const pastedText = dt.getData('text/plain');
         const pastedVideo = !dt.files.length && pastedText && !/\s/.test(pastedText.trim()) && videoEmbedUrl(pastedText);
@@ -3681,9 +3717,10 @@ RemminStore.ready.then(() => {
         return `${Math.floor(sec / 60)}:${pad(sec % 60)}`;
     }
 
-    function voiceChipHtml(src, name, duration) {
+    function voiceChipHtml(src, name, duration, loop = false) {
         const span = document.createElement('span');
         span.setAttribute('data-voice', src);
+        if (loop) span.setAttribute('data-loop', '1');
         span.setAttribute('data-name', name || 'Voice note');
         span.setAttribute('data-duration', String(Math.round(duration || 0)));
         span.textContent = `🎤 ${name || 'Voice note'}`;
@@ -3866,10 +3903,7 @@ RemminStore.ready.then(() => {
         if (e.target.closest('.voice-play')) { toggleVoicePlayback(chip); return true; }
         if (e.target.closest('.voice-loop')) {
             const on = chip.getAttribute('data-loop') !== '1';
-            if (on) chip.setAttribute('data-loop', '1'); else chip.removeAttribute('data-loop');
-            chip.querySelector('.voice-loop').classList.toggle('on', on);
-            if (voicePlayingChip === chip && voiceAudio) voiceAudio.loop = on;
-            markTextChanged();
+            textChipSetLoop(chip, on);
             toast(on ? 'Loop on: it plays again and again' : 'Loop off');
             return true;
         }
@@ -3915,14 +3949,14 @@ RemminStore.ready.then(() => {
         }
     }
 
-    function insertVoiceChip(src, name, duration) {
+    function insertVoiceChip(src, name, duration, loop = false) {
         if (!noteById(state.currentNoteId)) return;
         if (src.length > VOICE_MAX_CHARS) {
             toast('This recording is too large to store. Keep voice notes under a few minutes.');
             return;
         }
         ensureCaretInEditor();
-        const html = voiceChipHtml(src, name, duration) + '&nbsp;';
+        const html = voiceChipHtml(src, name, duration, loop) + '&nbsp;';
         if (!document.execCommand('insertHTML', false, html)) {
             const tmp = document.createElement('span');
             tmp.innerHTML = html;
@@ -3964,6 +3998,68 @@ RemminStore.ready.then(() => {
             }
         }
     }
+
+    /* ---- the options of an audio chip (Text and Collage), copy / paste ---- */
+    const AUDIO_COPY_RE = /^\[Remmin audio\] (\{[\s\S]*\})$/;
+    function copyAudio(a) {
+        const text = `[Remmin audio] ${JSON.stringify({ name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop, src: a.src })}`;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => toast('Audio copied: paste it (Ctrl+V) in Text or Collage, in any note'), () => toast('Could not copy the audio'));
+        } else toast('Could not copy the audio');
+    }
+    function pastedAudio(e) {
+        const t = e.clipboardData ? e.clipboardData.getData('text/plain').trim() : '';
+        const m = AUDIO_COPY_RE.exec(t);
+        if (!m) return null;
+        try {
+            const a = JSON.parse(m[1]);
+            return a && typeof a.src === 'string' && VOICE_SRC_RE.test(a.src) ? { src: a.src, name: String(a.name || 'Voice note').slice(0, 200), duration: Number(a.duration) || 0, loop: !!a.loop } : null;
+        } catch (_) { return null; }
+    }
+    function downloadAudio(src, name) {
+        const ext = (/^data:audio\/([\w]+)/.exec(src) || [])[1] || 'webm';
+        const a = document.createElement('a');
+        a.href = src;
+        a.download = `${(name || 'audio').replace(/[\\/:*?"<>|]+/g, '_')}.${ext === 'mpeg' ? 'mp3' : ext}`;
+        document.body.appendChild(a); a.click(); a.remove();
+    }
+    // chip: the chip on screen; o: { loop, setLoop, rename, remove }
+    function audioMenuActions(chip, o) {
+        const playing = voicePlayingChip === chip && voiceAudio && !voiceAudio.paused;
+        const a = { src: chip.getAttribute('data-voice'), name: chip.getAttribute('data-name'), duration: Number(chip.getAttribute('data-duration')) || 0, loop: o.loop };
+        return [
+            { label: playing ? 'Pause' : 'Play', icon: playing ? '⏸' : '▶', run: () => toggleVoicePlayback(chip) },
+            { label: o.loop ? 'Loop off' : 'Loop on (play again and again)', icon: '🔁', run: o.setLoop },
+            { label: 'Copy audio', icon: '⧉', run: () => copyAudio(a) },
+            { label: 'Download audio', icon: '⬇', run: () => downloadAudio(a.src, a.name) },
+            { label: 'Rename', icon: '✎', run: o.rename },
+            { label: 'Remove audio', icon: '🗑', danger: true, run: o.remove }
+        ];
+    }
+    function textChipSetLoop(chip, on) {
+        if (on) chip.setAttribute('data-loop', '1'); else chip.removeAttribute('data-loop');
+        const b = chip.querySelector('.voice-loop');
+        if (b) b.classList.toggle('on', on);
+        if (voicePlayingChip === chip && voiceAudio) voiceAudio.loop = on;
+        markTextChanged();
+    }
+    editorEl.addEventListener('contextmenu', (e) => {
+        const chip = e.target.closest && e.target.closest('.voice-chip');
+        if (!chip || !editorEl.contains(chip)) return;
+        e.preventDefault();
+        menuAt(e.clientX, e.clientY, 'Audio', audioMenuActions(chip, {
+            loop: chip.getAttribute('data-loop') === '1',
+            setLoop: () => textChipSetLoop(chip, chip.getAttribute('data-loop') !== '1'),
+            rename: async () => {
+                const name = await askText('Rename audio', chip.getAttribute('data-name'), 'Rename');
+                if (name === null || !name.trim() || !editorEl.contains(chip)) return;
+                chip.setAttribute('data-name', name.trim());
+                chip.querySelector('.voice-name').textContent = `🎤 ${name.trim()}`;
+                markTextChanged();
+            },
+            remove: () => { if (voicePlayingChip === chip) stopVoicePlayback(); recordText(); chip.remove(); markTextChanged(); }
+        }));
+    });
 
     /* ---- recorder ---- */
     const voice = { recorder: null, stream: null, chunks: [], startedAt: 0, timer: null,
@@ -4023,8 +4119,10 @@ RemminStore.ready.then(() => {
         setVoiceUi('idle');
     }
 
-    function openVoiceModal() {
+    let voiceTarget = 'text'; // where the recording / audio file goes: 'text' or 'collage'
+    function openVoiceModal(target) {
         if (!noteById(state.currentNoteId)) return;
+        voiceTarget = target === 'collage' ? 'collage' : 'text';
         saveEditorSelection();
         resetVoiceModal();
         $('voiceName').value = `Voice note ${formatTime(toLocalIso(new Date()))}`;
@@ -4095,7 +4193,7 @@ RemminStore.ready.then(() => {
         } catch (_) { /* meter is optional */ }
     }
 
-    $('insertVoiceBtn').addEventListener('click', openVoiceModal);
+    $('insertVoiceBtn').addEventListener('click', () => openVoiceModal('text'));
     $('voiceRecBtn').addEventListener('click', () => {
         if (voice.recorder && voice.recorder.state === 'recording') {
             voice.duration = (Date.now() - voice.startedAt) / 1000;
@@ -4110,6 +4208,7 @@ RemminStore.ready.then(() => {
         const { result, duration } = voice;
         $('voiceModal').classList.remove('active');
         resetVoiceModal();
+        if (voiceTarget === 'collage') { cbAddAudio({ src: result, name, duration }); return; }
         restoreEditorSelection();
         insertVoiceChip(result, name, duration);
     });
@@ -4123,6 +4222,7 @@ RemminStore.ready.then(() => {
         e.target.value = '';
         if (!files.length) return;
         closeVoiceModal();
+        if (voiceTarget === 'collage') { cbAddAudioFiles(files); return; }
         restoreEditorSelection();
         await insertAudioFiles(files);
     });
@@ -6910,15 +7010,21 @@ RemminStore.ready.then(() => {
     let gifTimer = null;
     function animateDrawGifs() {
         clearTimeout(gifTimer);
+        if (typeof dvcUpdate === 'function' && (state.prefs.mode !== 'draw' || state.prefs.activeTab === 'calendar')) dvcUpdate();
         const showing = state.prefs.mode === 'draw' && state.prefs.activeTab !== 'calendar' && !document.hidden;
         // videos only play while they are on the shown drawing
         const onDrawing = showing ? state.draw.strokes.filter((s) => s.video) : [];
         const playing = new Set(onDrawing.map((s) => s.video).filter((r) => !drawVideoPaused.has(r)));
         drawVideoCache.forEach((v, src) => {
-            if (!playing.has(src)) { if (!v.paused) v.pause(); return; }
-            const sound = onDrawing.some((s) => s.video === src && !s.muted);
-            if (v.paused || (sound && v.muted && !drawNeedsUnmute) || (!sound && !v.muted)) playDrawVideo(v, sound);
+            if (!playing.has(src)) { if (!v.paused && !v.classList.contains('draw-video-full')) v.pause(); return; }
+            const items = onDrawing.filter((s) => s.video === src);
+            const sound = items.some((s) => !s.muted);
+            v.loop = items.some((s) => s.loop !== false);
+            const vol = Math.max(0, Math.min(1, typeof items[0].volume === 'number' ? items[0].volume : 1));
+            if (Math.abs(v.volume - vol) > 0.001) v.volume = vol;
+            if ((v.paused && !v.ended) || (sound && v.muted && !drawNeedsUnmute) || (!sound && !v.muted)) playDrawVideo(v, sound);
         });
+        dvcUpdate();
         if (!showing) return;
         if (!onDrawing.length && !state.draw.strokes.some((s) => s.image && gifAnims.get(s.image))) return;
         gifTimer = setTimeout(() => { if (!state.draw.drawing) renderStrokes(); else animateDrawGifs(); }, playing.size ? 33 : 60);
@@ -7089,6 +7195,122 @@ RemminStore.ready.then(() => {
         flushEditor();
         toast('Video added: it plays on repeat. Right-click it for sound, pause and more');
     }
+    /* ---- the controls of a video in the drawing (shown when the mouse is on it) ---- */
+    const dvc = document.createElement('div');
+    dvc.className = 'draw-video-controls';
+    dvc.hidden = true;
+    dvc.innerHTML = '<button type="button" data-a="play" title="Play / pause">⏸</button>' +
+        '<input type="range" class="dvc-seek" min="0" max="1000" value="0" title="Go to">' +
+        '<span class="dvc-time">0:00 / 0:00</span>' +
+        '<button type="button" data-a="loop" title="Loop: play again and again">🔁</button>' +
+        '<button type="button" data-a="mute" title="Sound on / off">🔊</button>' +
+        '<input type="range" class="dvc-vol" min="0" max="100" value="100" title="Volume">' +
+        '<button type="button" data-a="full" title="Full screen">⛶</button>';
+    document.body.appendChild(dvc);
+    let dvcItem = null, dvcHideTimer = null, dvcSeeking = false;
+    state.dvcReady = true;
+    function dvcShow(item) {
+        clearTimeout(dvcHideTimer);
+        dvcItem = item;
+        dvc.hidden = false;
+        dvcUpdate();
+    }
+    function dvcHideSoon() {
+        clearTimeout(dvcHideTimer);
+        dvcHideTimer = setTimeout(() => { if (!dvc.matches(':hover') && !dvcSeeking) { dvc.hidden = true; dvcItem = null; } }, 1200);
+    }
+    function dvcUpdate() {
+        if (!state.dvcReady) return;
+        if (!dvcItem) { dvc.hidden = true; return; }
+        if (state.prefs.mode !== 'draw' || state.prefs.activeTab === 'calendar' || !state.draw.strokes.includes(dvcItem) || drawContainer.offsetParent === null) {
+            dvc.hidden = true; dvcItem = null; return;
+        }
+        const r = canvas.getBoundingClientRect();
+        const w = Math.max(300, dvcItem.w * r.width);
+        const left = Math.max(4, Math.min(window.innerWidth - w - 4, r.left + dvcItem.x * r.width));
+        const top = Math.min(window.innerHeight - 44, r.top + (dvcItem.y + dvcItem.h) * r.height - 40);
+        dvc.style.left = `${left}px`;
+        dvc.style.top = `${Math.max(4, top)}px`;
+        dvc.style.width = `${w}px`;
+        const v = drawVideoEl(dvcItem.video);
+        const paused = drawVideoPaused.has(dvcItem.video) || (v.ended && !v.loop);
+        dvc.querySelector('[data-a="play"]').textContent = paused ? '▶' : '⏸';
+        if (!dvcSeeking && v.duration) dvc.querySelector('.dvc-seek').value = String(Math.round(v.currentTime / v.duration * 1000));
+        dvc.querySelector('.dvc-time').textContent = `${formatSeconds(v.currentTime || 0)} / ${formatSeconds(v.duration || 0)}`;
+        dvc.querySelector('[data-a="loop"]').classList.toggle('on', dvcItem.loop !== false);
+        dvc.querySelector('[data-a="mute"]').textContent = dvcItem.muted ? '🔇' : '🔊';
+        const vol = dvc.querySelector('.dvc-vol');
+        if (document.activeElement !== vol) vol.value = String(Math.round((typeof dvcItem.volume === 'number' ? dvcItem.volume : 1) * 100));
+    }
+    drawContainer.addEventListener('pointermove', (e) => {
+        if (state.prefs.mode !== 'draw' || state.draw.drawing) return;
+        const pic = pictureAt(pointerPos(e, true));
+        if (pic && pic.video) dvcShow(pic); else if (dvcItem) dvcHideSoon();
+    });
+    drawContainer.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' || state.prefs.mode !== 'draw') return;
+        const pic = pictureAt(pointerPos(e, true));
+        if (pic && pic.video) dvcShow(pic); // touch: tap the video to see its controls
+    });
+    drawContainer.addEventListener('pointerleave', () => { if (dvcItem) dvcHideSoon(); });
+    dvc.addEventListener('pointerenter', () => clearTimeout(dvcHideTimer));
+    dvc.addEventListener('pointerleave', () => dvcHideSoon());
+    dvc.addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-a]');
+        if (!b || !dvcItem) return;
+        const item = dvcItem, ref = item.video, v = drawVideoEl(ref);
+        if (b.dataset.a === 'play') {
+            if (drawVideoPaused.has(ref) || v.ended) {
+                drawVideoPaused.delete(ref);
+                if (v.ended) v.currentTime = 0;
+                playDrawVideo(v, !item.muted);
+            } else { drawVideoPaused.add(ref); v.pause(); }
+        } else if (b.dataset.a === 'loop') {
+            item.loop = item.loop === false;
+            if (item.loop === true) delete item.loop;
+            flushEditor();
+        } else if (b.dataset.a === 'mute') {
+            item.muted = !item.muted;
+            if (!item.muted) delete item.muted;
+            flushEditor();
+        } else if (b.dataset.a === 'full') {
+            v.classList.add('draw-video-full');
+            v.controls = true;
+            document.body.appendChild(v);
+            const back = () => {
+                if (document.fullscreenElement === v) return;
+                document.removeEventListener('fullscreenchange', back);
+                v.controls = false;
+                v.classList.remove('draw-video-full');
+                v.remove();
+            };
+            document.addEventListener('fullscreenchange', back);
+            (v.requestFullscreen ? v.requestFullscreen() : Promise.reject()).catch(() => { back(); toast('Full screen is not possible here'); });
+            if (v.paused) playDrawVideo(v, !item.muted);
+        }
+        animateDrawGifs();
+        dvcUpdate();
+    });
+    const dvcSeek = dvc.querySelector('.dvc-seek');
+    dvcSeek.addEventListener('pointerdown', () => { dvcSeeking = true; });
+    dvcSeek.addEventListener('input', () => {
+        if (!dvcItem) return;
+        const v = drawVideoEl(dvcItem.video);
+        if (v.duration) v.currentTime = Number(dvcSeek.value) / 1000 * v.duration;
+        renderStrokes();
+    });
+    dvcSeek.addEventListener('change', () => { dvcSeeking = false; });
+    document.addEventListener('pointerup', () => { dvcSeeking = false; });
+    const dvcVol = dvc.querySelector('.dvc-vol');
+    dvcVol.addEventListener('input', () => {
+        if (!dvcItem) return;
+        const vol = Number(dvcVol.value) / 100;
+        if (vol >= 1) delete dvcItem.volume; else dvcItem.volume = vol;
+        drawVideoEl(dvcItem.video).volume = vol;
+        if (vol > 0 && dvcItem.muted) delete dvcItem.muted;
+    });
+    dvcVol.addEventListener('change', () => { flushEditor(); animateDrawGifs(); });
+
     // right-click on a video in the drawing: its options
     function drawVideoMenu(item, x, y) {
         const v = drawVideoEl(item.video);
@@ -7171,6 +7393,7 @@ RemminStore.ready.then(() => {
         if (typing && typing.offsetParent !== null) return;
         const copiedVid = pastedVideoRef(e);
         if (copiedVid) { e.preventDefault(); addDrawVideoRefs([copiedVid]); return; }
+        if (pastedAudio(e)) { e.preventDefault(); toast('Audio can go in Text and Collage (not in a drawing)'); return; }
         const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
         if (!files.length) {
             // pieces copied with the select tool (they also carry a picture: use the real lines instead)
@@ -8217,6 +8440,8 @@ RemminStore.ready.then(() => {
                 el.dataset.id = it.id;
                 el.innerHTML = it.type === 'frame' ? '<div class="cb-frame-title" spellcheck="false"></div>'
                     : it.type === 'image' ? '<img draggable="false" alt="">'
+                    : it.type === 'audio' ? '<span class="voice-chip cb-chip"><button class="voice-play" type="button" title="Play">▶</button>' +
+                        '<button class="voice-loop" type="button" title="Loop: play again and again">🔁</button><span class="voice-name"></span><span class="voice-time"></span></span>'
                     : it.type === 'video' ? `<div class="cb-video-bar" title="Drag here to move">▶ Video</div>${isVideoSrc(it.src) ? videoFrameHtml(it.src) : ''}`
                     : '<div class="cb-text"></div>';
                 cbEls.set(it.id, el);
@@ -8228,6 +8453,18 @@ RemminStore.ready.then(() => {
             el.style.left = `${it.x}px`;
             el.style.top = `${it.y}px`;
             if (it.type === 'text') el.style.maxWidth = `${it.w}px`;
+            else if (it.type === 'audio') {
+                el.style.width = `${it.w}px`; el.style.height = '';
+                const chip = el.firstChild;
+                if (el._src !== it.src) { chip.setAttribute('data-voice', it.src || ''); el._src = it.src; }
+                chip.setAttribute('data-name', it.name || 'Voice note');
+                chip.setAttribute('data-duration', String(Math.round(it.duration || 0)));
+                if (it.loop) chip.setAttribute('data-loop', '1'); else chip.removeAttribute('data-loop');
+                chip.querySelector('.voice-loop').classList.toggle('on', !!it.loop);
+                const nm = `🎤 ${it.name || 'Voice note'}`;
+                if (chip.querySelector('.voice-name').textContent !== nm) chip.querySelector('.voice-name').textContent = nm;
+                if (voicePlayingChip !== chip) chip.querySelector('.voice-time').textContent = formatSeconds(it.duration || 0);
+            }
             else { el.style.width = `${it.w}px`; el.style.height = `${it.h}px`; }
             if (it.type === 'sticky') { el.style.background = it.color || CB_DEFAULT.sticky; el.style.color = textOn(it.color || CB_DEFAULT.sticky); }
             if (it.type === 'frame') {
@@ -8303,6 +8540,38 @@ RemminStore.ready.then(() => {
     function cbNewFrame(x, y, w, h) {
         const n = cb.items.filter((i) => i.type === 'frame').length + 1;
         return cbAdd({ type: 'frame', x, y, w, h, color: cbColorPref('frame'), title: `Frame ${n}` });
+    }
+    function cbAddAudio(a, at) {
+        const note = noteById(cb.noteId);
+        if (!note || isPrivateLocked(note) || !a || !VOICE_SRC_RE.test(a.src || '')) return;
+        if (a.src.length > VOICE_MAX_CHARS) { toast('This recording is too large to store. Keep voice notes under a few minutes.'); return; }
+        const p = at || cbViewCenter();
+        cbRecord();
+        cbAdd({ type: 'audio', x: p.x - 140, y: p.y - 20, w: 280, h: 40, src: a.src, name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop });
+        cbRender();
+        cbSave();
+    }
+    async function cbAddAudioFiles(files, at) {
+        for (const [i, file] of [...files].filter((f) => f.type.startsWith('audio/')).entries()) {
+            try {
+                const src = await blobToDataUrl(file);
+                if (!VOICE_SRC_RE.test(src)) throw new Error('unsupported');
+                const p = at || cbViewCenter();
+                cbAddAudio({ src, name: file.name.replace(/\.[^.]+$/, ''), duration: await audioDuration(src) }, { x: p.x + i * 20, y: p.y + i * 50 });
+            } catch (_) { toast(`Could not add audio: ${file.name}`); }
+        }
+    }
+    function cbAudioActions(it, chip) {
+        return audioMenuActions(chip, {
+            loop: !!it.loop,
+            setLoop: () => { cbRecord(); it.loop = !it.loop; if (voicePlayingChip === chip && voiceAudio) voiceAudio.loop = it.loop; cbRender(); cbSave(); },
+            rename: async () => {
+                const name = await askText('Rename audio', it.name || 'Voice note', 'Rename');
+                if (name === null || !name.trim()) return;
+                cbRecord(); it.name = name.trim(); cbRender(); cbSave();
+            },
+            remove: () => { if (voicePlayingChip === chip) stopVoicePlayback(); cb.sel = new Set([it.id]); cbDelete(); }
+        });
     }
     function cbAddVideo(src, at) {
         const note = noteById(cb.noteId);
@@ -8502,6 +8771,7 @@ RemminStore.ready.then(() => {
                 break;
             }
             case 'cbVideoBtn': askVideoUrl().then((src) => { if (src) cbAddVideo(src); }); break;
+            case 'cbAudioBtn': openVoiceModal('collage'); break;
             case 'cbUndo': cbUndoRedo(true); break;
             case 'cbRedo': cbUndoRedo(false); break;
             case 'cbDup': cbDuplicate(); break;
@@ -8659,6 +8929,32 @@ RemminStore.ready.then(() => {
 
     cbBoard.addEventListener('pointerdown', (e) => {
         if (!cbActive()) return;
+        // the play / loop buttons of an audio item
+        const chipBtn = e.button === 0 && e.target.closest && e.target.closest('.cb-chip .voice-play, .cb-chip .voice-loop');
+        if (chipBtn) {
+            const el = chipBtn.closest('.cb-item');
+            const it = el && cbById(el.dataset.id);
+            if (it) {
+                e.preventDefault();
+                e.stopPropagation();
+                const chip = el.querySelector('.cb-chip');
+                if (chipBtn.classList.contains('voice-play')) toggleVoicePlayback(chip);
+                else { cbRecord(); it.loop = !it.loop; if (voicePlayingChip === chip && voiceAudio) voiceAudio.loop = it.loop; cbRender(); cbSave(); }
+                return;
+            }
+        }
+        // right-click on an audio item: its options
+        const audEl = e.button === 2 && e.target.closest && e.target.closest('.cb-audio');
+        if (audEl) {
+            const it = cbById(audEl.dataset.id);
+            if (it) {
+                e.preventDefault();
+                cb.sel = new Set([it.id]);
+                cbRender();
+                menuAt(e.clientX, e.clientY, 'Audio', cbAudioActions(it, audEl.querySelector('.cb-chip')));
+                return;
+            }
+        }
         // right-click on a video: its options
         const vidEl = e.button === 2 && e.target.closest && e.target.closest('.cb-video');
         if (vidEl) {
@@ -8962,8 +9258,10 @@ RemminStore.ready.then(() => {
     cbBoard.addEventListener('drop', (e) => {
         const files = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('image/'));
         const videos = [...(e.dataTransfer.files || [])].filter(isVideoFile);
-        if (!files.length && !videos.length) return;
+        const audios = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('audio/'));
+        if (!files.length && !videos.length && !audios.length) return;
         e.preventDefault();
+        if (audios.length) cbAddAudioFiles(audios, cbWorldPt(e));
         if (videos.length) {
             const at = cbWorldPt(e);
             readVideoFiles(videos).then((srcs) => srcs.forEach((src, i) => cbAddVideo(src, { x: at.x + i * 30, y: at.y + i * 30 })));
@@ -9012,6 +9310,10 @@ RemminStore.ready.then(() => {
         if (Date.now() - cbMiddleAt < 1500) { e.preventDefault(); return; }
         const copiedVid = !cb.editing && !cbTypingElsewhere(e) && pastedVideoRef(e);
         if (copiedVid) { e.preventDefault(); cbAddVideo(copiedVid); return; }
+        const copiedAud = !cb.editing && !cbTypingElsewhere(e) && pastedAudio(e);
+        if (copiedAud) { e.preventDefault(); cbAddAudio(copiedAud); return; }
+        const audFiles = !cb.editing ? [...(e.clipboardData.files || [])].filter((f) => f.type.startsWith('audio/')) : [];
+        if (audFiles.length) { e.preventDefault(); cbAddAudioFiles(audFiles); return; }
         const files = [...(e.clipboardData.files || [])].filter((f) => f.type.startsWith('image/'));
         if (cb.editing) {
             // pictures pasted while typing become pictures on the board; text goes in the note
@@ -10376,6 +10678,8 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Audio in Collage (record, drop, copy / paste); full video controls in Draw; deleted videos free their space',
+        'No hidden-note stripes on the pass screen of a private note',
         'Videos: move + resize in Text, same right-click menu everywhere, copy / paste, compress, sound in Draw; 🔁 loop for audio',
         'Drag video files from your disk into Text, Collage and Draw',
         'Holiday stripes: new green colour, twice as wide',

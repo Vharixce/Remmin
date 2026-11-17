@@ -2280,3 +2280,21 @@ video.missing { min-height: 120px; }
 .compress-cancel { align-self: flex-end; }
 .voice-chip .voice-loop { background: transparent; opacity: .45; width: 22px; height: 20px; font-size: 12px; }
 .voice-chip .voice-loop.on { opacity: 1; background: rgba(124, 111, 240, .35); }
+
+/* audio on the Collage board: the same chip as in Text */
+.cb-audio { display: flex; align-items: center; }
+.cb-audio .cb-chip { width: 100%; margin: 0; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); background: #2a2550; }
+.cb-audio .voice-name { cursor: inherit; flex: 1; min-width: 0; }
+.cb-audio .voice-name:hover { text-decoration: none; }
+.cb-audio.selected .cb-chip { outline: 2px solid #7c6ff0; outline-offset: 2px; }
+/* the controls of a video in Draw */
+.draw-video-controls { position: fixed; z-index: 1500; display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px; box-sizing: border-box; border-radius: 0 0 6px 6px; background: linear-gradient(transparent, rgba(0, 0, 0, .75) 35%); color: #fff; font-size: 12px; }
+.draw-video-controls[hidden] { display: none; }
+.draw-video-controls button { background: none; border: 0; color: #fff; cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 4px; flex-shrink: 0; }
+.draw-video-controls button:hover { background: rgba(255, 255, 255, .15); }
+.draw-video-controls button[data-a="loop"] { opacity: .45; }
+.draw-video-controls button[data-a="loop"].on { opacity: 1; }
+.draw-video-controls .dvc-seek { flex: 1; min-width: 60px; accent-color: #7c6ff0; }
+.draw-video-controls .dvc-vol { width: 64px; flex-shrink: 0; accent-color: #7c6ff0; }
+.draw-video-controls .dvc-time { font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
+video.draw-video-full { position: fixed; left: -10000px; top: 0; width: 10px; height: 10px; }

@@ -188,6 +188,7 @@ RemminStore.ready.then(() => {
         trash: 'remmin.trash.v1',
         trashGone: 'remmin.trashGone.v1',
         media: 'remmin.media.v1',
+        mediaOrig: 'remmin.mediaOrig.v1',
         updatedAt: 'remmin.updatedAt.v1',
         github: 'remmin.github.v1',
         server: 'remmin.server.v1'
@@ -287,6 +288,12 @@ RemminStore.ready.then(() => {
 
     function load() {
         state.media = validMedia(readJSON(STORAGE.media, {}));
+        // originals of compressed videos (only on this device, for "Undo compression"; kept 7 days)
+        state.mediaOrig = {};
+        const origs = readJSON(STORAGE.mediaOrig, {});
+        if (origs && typeof origs === 'object') Object.entries(origs).forEach(([k, o]) => {
+            if (state.media[k] && o && typeof o.data === 'string' && Date.now() - (o.at || 0) < 7 * 86400000) state.mediaOrig[k] = o;
+        });
         state.notes = readJSON(STORAGE.notes, []);
         state.folders = readJSON(STORAGE.folders, []);
         state.prefs = Object.assign(state.prefs, readJSON(STORAGE.prefs, {}));
@@ -2037,7 +2044,8 @@ RemminStore.ready.then(() => {
             close: () => { compressBox.hidden = true; }
         };
     }
-    async function compressVideoUrl(url, { maxH = 720, bitrate = 1600000, maxBytes = 0, label = 'video' } = {}) {
+    // maxH 'auto': the resolution follows the bitrate (for "compress to … MB")
+    async function compressVideoUrl(url, { maxH = 720, bitrate = 1600000, maxBytes = 0, label = 'video', audioBps = 96000 } = {}) {
         const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
             .find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
         if (!mime || !HTMLCanvasElement.prototype.captureStream) throw new Error('unsupported');
@@ -2047,7 +2055,8 @@ RemminStore.ready.then(() => {
         await new Promise((resolve, reject) => { v.onloadedmetadata = resolve; v.onerror = () => reject(new Error('cannot play')); });
         const dur = Number.isFinite(v.duration) ? v.duration : 0;
         let rate = bitrate;
-        if (maxBytes && dur) rate = Math.max(150000, Math.min(bitrate, (maxBytes * 8 * 0.9) / dur - 96000));
+        if (maxBytes && dur) rate = Math.max(60000, Math.min(bitrate, (maxBytes * 8 * 0.9) / dur - audioBps));
+        if (maxH === 'auto') maxH = rate > 2500000 ? 1080 : rate > 1000000 ? 720 : rate > 450000 ? 480 : rate > 200000 ? 360 : 240;
         const scale = Math.min(1, maxH / (v.videoHeight || maxH));
         const w = Math.max(2, Math.round((v.videoWidth || 640) * scale / 2) * 2), h = Math.max(2, Math.round((v.videoHeight || 360) * scale / 2) * 2);
         const c = document.createElement('canvas');
@@ -2064,7 +2073,7 @@ RemminStore.ready.then(() => {
             dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
             await ac.resume();
         } catch (_) { v.muted = true; }
-        const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: Math.round(rate), audioBitsPerSecond: 96000 });
+        const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: Math.round(rate), audioBitsPerSecond: audioBps });
         const chunks = [];
         rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
         const stopped = new Promise((resolve) => { rec.onstop = resolve; });
@@ -2093,6 +2102,88 @@ RemminStore.ready.then(() => {
         if (!/^data:video\//.test(out)) throw new Error('failed');
         return out;
     }
+    // the original stays on this device for a week, so the compression can be undone
+    function keepOriginal(id, data) {
+        if (!state.mediaOrig[id]) state.mediaOrig[id] = { data, at: Date.now() };
+        writeJSON(STORAGE.mediaOrig, state.mediaOrig);
+    }
+    // undo: the original comes back under a new id, and every note that uses the video points to it
+    // (so the sync, where the smaller version would win, keeps the original)
+    function undoCompression(ref) {
+        const id = ref.slice(6);
+        const orig = state.mediaOrig[id];
+        if (!orig) { toast('The original of this video is not on this device any more'); return; }
+        flushEditor();
+        const newId = `${id.slice(0, 26)}r${Date.now().toString(36)}`;
+        state.media[newId] = orig.data;
+        delete state.mediaOrig[id];
+        writeJSON(STORAGE.mediaOrig, state.mediaOrig);
+        const from = `media:${id}`, to = `media:${newId}`;
+        const swap = (v) => {
+            if (typeof v === 'string') return v.includes(from) ? v.split(from).join(to) : v;
+            if (Array.isArray(v)) { v.forEach((x, i) => { v[i] = swap(x); }); return v; }
+            if (v && typeof v === 'object') Object.keys(v).forEach((k) => { v[k] = swap(v[k]); });
+            return v;
+        };
+        state.notes.forEach((n) => {
+            if (!JSON.stringify(n).includes(from)) return;
+            swap(n);
+            n.modifiedAt = new Date().toISOString();
+        });
+        state.trash.forEach((t) => { if (t && t.note) swap(t.note); });
+        scheduleSaveMedia();
+        saveNotes();
+        writeJSON(STORAGE.trash, state.trash);
+        markChanged();
+        scheduleGithubSave();
+        renderEditor();
+        toast(`Compression undone: back to ${mbOf(orig.data).toFixed(1)} MB`);
+    }
+    // compress to (at most) a number of MB; a second, smaller try when the first one ends up too big
+    async function compressMediaTo(ref) {
+        const id = ref.slice(6);
+        const before = state.media[id];
+        if (!before) return;
+        const now = mbOf(before);
+        const answer = await askDialog({
+            title: 'Compress to … MB',
+            message: `How many MB may the video be? Now it is ${now.toFixed(1)} MB; enter a smaller number (for example ${Math.max(0.1, now / 2).toFixed(1)}).`,
+            input: Math.max(0.1, now / 2).toFixed(1),
+            okLabel: 'Compress'
+        });
+        if (answer === null || answer === false) return;
+        const target = parseFloat(String(answer).replace(',', '.'));
+        if (!Number.isFinite(target) || target <= 0) { toast('Enter a number of MB, for example 1.5'); return; }
+        if (target >= now) { toast(`Enter a number below ${now.toFixed(1)} MB`); return; }
+        const bytes = target * 1048576;
+        const audioBps = target / now < 0.15 ? 32000 : 64000;
+        let out;
+        try {
+            const url = await mediaUrl(ref);
+            out = await compressVideoUrl(url, { maxH: 'auto', bitrate: 8000000, maxBytes: bytes, audioBps, label: `video to ${target} MB` });
+            const got = out.length * 0.75;
+            if (got > bytes * 1.03) {
+                // a bit too big: once more, with a lower bitrate
+                const dur = await new Promise((res) => { const v = document.createElement('video'); v.preload = 'metadata'; v.onloadedmetadata = () => res(v.duration); v.onerror = () => res(0); v.src = url; });
+                if (Number.isFinite(dur) && dur > 0) {
+                    const rate = Math.max(40000, ((bytes * 8 * 0.85) / dur - audioBps) * Math.min(1, bytes / got));
+                    out = await compressVideoUrl(url, { maxH: 'auto', bitrate: rate, audioBps: Math.min(audioBps, 32000), label: `video to ${target} MB (2nd try)` });
+                }
+            }
+        } catch (err) {
+            toast(err && err.message === 'cancelled' ? 'Compressing stopped' : err && err.message === 'unsupported' ? 'This browser cannot compress videos' : 'Could not compress this video');
+            return;
+        }
+        if (out.length >= before.length) { toast(`Not smaller after compressing: kept the original (${now.toFixed(1)} MB)`); return; }
+        keepOriginal(id, before);
+        state.media[id] = out;
+        scheduleSaveMedia();
+        refreshMediaPlayers(id);
+        markChanged();
+        scheduleGithubSave();
+        const got = mbOf(out);
+        toast(`Video compressed: ${now.toFixed(1)} MB → ${got.toFixed(2)} MB${got > target * 1.03 ? ` (a little above ${target} MB: this was the smallest possible)` : ''}`);
+    }
     // compress a video that is already in a note (all its places get the smaller version)
     async function compressMedia(ref, preset) {
         const id = ref.slice(6);
@@ -2102,6 +2193,7 @@ RemminStore.ready.then(() => {
         try { out = await compressVideoUrl(await mediaUrl(ref), { ...preset, label: 'video' }); }
         catch (err) { toast(err && err.message === 'cancelled' ? 'Compressing stopped' : err && err.message === 'unsupported' ? 'This browser cannot compress videos' : 'Could not compress this video'); return; }
         if (out.length >= before.length * 0.95) { toast(`Not smaller after compressing (${mbOf(before).toFixed(1)} MB): kept the original`); return; }
+        keepOriginal(id, before);
         state.media[id] = out;
         scheduleSaveMedia();
         refreshMediaPlayers(id);
@@ -2142,7 +2234,7 @@ RemminStore.ready.then(() => {
         showMenu(pointAnchor, title, actions);
     }
     // the same video options in Text, Collage and Draw
-    function videoMenuActions(src, { remove, sizes, sizeNow, sound, playing } = {}) {
+    function videoMenuActions(src, { remove, sizes, sizeNow, sound, playing, loop } = {}) {
         const items = [{ label: 'Copy video', icon: '⧉', run: () => copyVideo(src) }];
         if (isMediaRef(src)) {
             items.push({ label: 'Download video', icon: '⬇', run: () => downloadVideo(src) });
@@ -2150,12 +2242,16 @@ RemminStore.ready.then(() => {
             items.push({
                 label: `Compress video…${data ? ` (now ${mbOf(data).toFixed(1)} MB)` : ''}`, icon: '🗜',
                 run: () => setTimeout(() => menuAt(parseFloat(pointAnchor.style.left) || 200, parseFloat(pointAnchor.style.top) || 200, 'Compress to',
-                    COMPRESS_PRESETS.map((pr) => ({ label: pr.label, icon: '🗜', run: () => compressMedia(src, pr) }))), 0)
+                    [{ label: `Compress to … MB${data ? ` (now ${mbOf(data).toFixed(1)} MB)` : ''}`, icon: '✎', run: () => compressMediaTo(src) },
+                        ...COMPRESS_PRESETS.map((pr) => ({ label: pr.label, icon: '🗜', run: () => compressMedia(src, pr) }))]), 0)
             });
+            const orig = state.mediaOrig && state.mediaOrig[src.slice(6)];
+            if (orig) items.push({ label: `Undo compression (back to ${mbOf(orig.data).toFixed(1)} MB)`, icon: '↺', run: () => undoCompression(src) });
         } else items.push({ label: 'Open on the website', icon: '↗', run: () => window.open(videoWatchUrl(src), '_blank', 'noopener') });
         if (sizes) [[25, '1/4'], [50, '1/2'], [75, '3/4'], [100, 'Full width']].forEach(([w, name]) =>
             items.push({ label: `Size ${name}${sizeNow === w ? ' ✓' : ''}`, icon: '↔', run: () => sizes(w) }));
         if (playing) items.push({ label: playing.on ? 'Pause' : 'Play', icon: playing.on ? '⏸' : '▶', run: playing.toggle });
+        if (loop && isMediaRef(src)) items.push({ label: loop.on ? 'Loop off' : 'Loop on (play again and again)', icon: '🔁', run: loop.toggle });
         if (sound) items.push({ label: sound.on ? 'Sound off' : 'Sound on', icon: sound.on ? '🔇' : '🔊', run: sound.toggle });
         if (remove) items.push({ label: 'Remove video', icon: '🗑', danger: true, run: remove });
         return items;
@@ -2184,7 +2280,7 @@ RemminStore.ready.then(() => {
                 // an embedded YouTube / Vimeo video (only these two players are allowed)
                 if (child.tagName === 'DIV' && child.hasAttribute('data-video')) {
                     const src = child.getAttribute('data-video') || '';
-                    if (isVideoSrc(src)) child.replaceWith(videoBlock(doc, src, Number(child.getAttribute('data-w')))); else child.remove();
+                    if (isVideoSrc(src)) child.replaceWith(videoBlock(doc, src, Number(child.getAttribute('data-w')), child.getAttribute('data-loop') === '1')); else child.remove();
                     return;
                 }
                 clean(child);
@@ -3031,7 +3127,19 @@ RemminStore.ready.then(() => {
     // the options of a video in the text
     function textVideoActions(video) {
         const src = video.getAttribute('data-video');
+        const player = video.querySelector('video');
         return videoMenuActions(src, {
+            loop: {
+                on: video.getAttribute('data-loop') === '1',
+                toggle: () => {
+                    const on = video.getAttribute('data-loop') !== '1';
+                    recordText();
+                    if (on) video.setAttribute('data-loop', '1'); else video.removeAttribute('data-loop');
+                    if (player) player.loop = on;
+                    markTextChanged();
+                    toast(on ? 'Loop on: the video plays again and again' : 'Loop off');
+                }
+            },
             remove: () => { recordText(); video.remove(); markTextChanged(); },
             sizeNow: Number(video.getAttribute('data-w')) || 0,
             sizes: (w) => { recordText(); video.setAttribute('data-w', String(w)); video.style.width = `${w}%`; markTextChanged(); }
@@ -3419,20 +3527,21 @@ RemminStore.ready.then(() => {
         m = /player\.vimeo\.com\/video\/(\d+)/.exec(src);
         return m ? `https://vimeo.com/${m[1]}` : src;
     }
-    function videoFrameHtml(src) {
-        if (isMediaRef(src)) return `<video data-media="${escapeHtml(src)}" controls playsinline preload="metadata"></video>`;
+    function videoFrameHtml(src, loop = false) {
+        if (isMediaRef(src)) return `<video data-media="${escapeHtml(src)}" controls playsinline preload="metadata"${loop ? ' loop' : ''}></video>`;
         return `<iframe src="${escapeHtml(src)}" title="Video" loading="lazy" allowfullscreen ` +
             'allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>';
     }
     // w: width in % of the note (empty = the normal size)
-    function videoBlock(doc, src, w) {
+    function videoBlock(doc, src, w, loop = false) {
         const box = doc.createElement('div');
         box.className = `video-embed${isMediaRef(src) ? ' local' : ''}`;
         box.setAttribute('data-video', src);
         box.setAttribute('contenteditable', 'false');
         const pct = Math.round(Number(w));
         if (pct >= 10 && pct <= 100) { box.setAttribute('data-w', String(pct)); box.style.width = `${pct}%`; }
-        box.innerHTML = `${videoFrameHtml(src)}<span class="ve-handle" title="Drag to resize"></span>`;
+        if (loop && isMediaRef(src)) box.setAttribute('data-loop', '1');
+        box.innerHTML = `${videoFrameHtml(src, loop)}<span class="ve-handle" title="Drag to resize"></span>`;
         return box;
     }
     // players of video files get their video when they are shown
@@ -7317,6 +7426,7 @@ RemminStore.ready.then(() => {
         menuAt(x, y, 'Video', videoMenuActions(item.video, {
             playing: { on: !drawVideoPaused.has(item.video), toggle: () => { if (drawVideoPaused.has(item.video)) drawVideoPaused.delete(item.video); else { drawVideoPaused.add(item.video); v.pause(); } animateDrawGifs(); } },
             sound: { on: !item.muted, toggle: () => { pushDrawUndo(); item.muted = !item.muted; flushEditor(); animateDrawGifs(); } },
+            loop: { on: item.loop !== false, toggle: () => { pushDrawUndo(); if (item.loop === false) delete item.loop; else item.loop = false; flushEditor(); animateDrawGifs(); } },
             remove: () => {
                 pushDrawUndo();
                 state.draw.strokes = state.draw.strokes.filter((s) => s !== item);
@@ -8474,6 +8584,7 @@ RemminStore.ready.then(() => {
             }
             if (it.type === 'text') el.style.color = it.color || '';
             if (it.type === 'image') { const img = el.firstChild; if (img.getAttribute('src') !== it.src) img.src = it.src; }
+            if (it.type === 'video') { const pl = el.querySelector('video'); if (pl) pl.loop = !!it.loop; }
             const t = el.querySelector('.cb-text');
             if (t && cb.editing !== it.id && el._html !== it.html) { t.innerHTML = sanitizeHtml(it.html || ''); el._html = it.html; }
             el.classList.toggle('selected', cb.sel.has(it.id));
@@ -8963,7 +9074,10 @@ RemminStore.ready.then(() => {
                 e.preventDefault();
                 cb.sel = new Set([it.id]);
                 cbRender();
-                menuAt(e.clientX, e.clientY, 'Video', videoMenuActions(it.src, { remove: () => { cb.sel = new Set([it.id]); cbDelete(); } }));
+                menuAt(e.clientX, e.clientY, 'Video', videoMenuActions(it.src, {
+                    loop: { on: !!it.loop, toggle: () => { cbRecord(); it.loop = !it.loop; if (!it.loop) delete it.loop; cbRender(); cbSave(); toast(it.loop ? 'Loop on: the video plays again and again' : 'Loop off'); } },
+                    remove: () => { cb.sel = new Set([it.id]); cbDelete(); }
+                }));
                 return;
             }
         }
@@ -10678,6 +10792,9 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Undo the compression of a video (right-click, for 7 days on this device)',
+        'Compress a video to a size you choose (… MB)',
+        'Loop option for videos (right-click) in Text, Collage and Draw',
         'Audio in Collage (record, drop, copy / paste); full video controls in Draw; deleted videos free their space',
         'No hidden-note stripes on the pass screen of a private note',
         'Videos: move + resize in Text, same right-click menu everywhere, copy / paste, compress, sound in Draw; 🔁 loop for audio',

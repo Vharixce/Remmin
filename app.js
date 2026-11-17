@@ -4190,9 +4190,12 @@ RemminStore.ready.then(() => {
             chip.contentEditable = 'false';
             const name = chip.getAttribute('data-name') || 'Voice note';
             chip.innerHTML = `<span class="voice-handle" title="Drag to move">⠿</span>` +
+                `<button class="voice-back" type="button" title="15 seconds back">⏪</button>` +
                 `<button class="voice-play" type="button" title="Play">▶</button>` +
+                `<button class="voice-fwd" type="button" title="15 seconds forward">⏩</button>` +
+                `<input class="voice-seek" type="range" min="0" max="1000" value="0" title="Click or drag to go to a moment">` +
                 `<button class="voice-loop${chip.getAttribute('data-loop') === '1' ? ' on' : ''}" type="button" title="Loop: play again and again">🔁</button>` +
-                `<input class="voice-vol" type="range" min="0" max="100" value="${chipVolume(chip)}" title="Volume">` +
+                `<span class="voice-vol-icon" title="Volume">🔊</span><input class="voice-vol" type="range" min="0" max="100" value="${chipVolume(chip)}" title="Volume">` +
                 `<span class="voice-name" title="Click to rename">🎤 ${escapeHtml(name)}</span>` +
                 `<span class="voice-time">${formatSeconds(chip.getAttribute('data-duration'))}</span>` +
                 `<button class="voice-remove" type="button" title="Remove voice note">✕</button>`;
@@ -4217,6 +4220,8 @@ RemminStore.ready.then(() => {
             if (btn) btn.textContent = '▶';
             const time = voicePlayingChip.querySelector('.voice-time');
             if (time) time.textContent = formatSeconds(voicePlayingChip.getAttribute('data-duration'));
+            const seek = voicePlayingChip.querySelector('.voice-seek');
+            if (seek) seek.value = '0';
             voicePlayingChip.classList.remove('playing');
         }
         voicePlayingChip = null;
@@ -4235,9 +4240,12 @@ RemminStore.ready.then(() => {
         voiceAudio.volume = chipVolume(chip) / 100;
         const total = Number(chip.getAttribute('data-duration')) || 0;
         const timeEl = chip.querySelector('.voice-time');
+        const seekEl = chip.querySelector('.voice-seek');
         voiceAudio.addEventListener('timeupdate', () => {
             if (voicePlayingChip !== chip) return;
             timeEl.textContent = `${formatSeconds(voiceAudio.currentTime)} / ${formatSeconds(total || voiceAudio.duration)}`;
+            const len = voiceLength(chip);
+            if (seekEl && !seekEl.matches(':active') && len) seekEl.value = String(Math.round(Math.min(1, voiceAudio.currentTime / len) * 1000));
         });
         voiceAudio.addEventListener('ended', stopVoicePlayback);
         voiceAudio.play().catch(() => { toast('This voice note cannot be played in this browser'); stopVoicePlayback(); });
@@ -4245,9 +4253,30 @@ RemminStore.ready.then(() => {
         chip.classList.add('playing');
     }
 
-    // chip buttons must not move the text cursor (the volume slider must still be draggable)
+    // the length of an audio (the browser's, or the stored one: recordings often have no length in the file)
+    function voiceLength(chip) {
+        const d = voicePlayingChip === chip && voiceAudio ? voiceAudio.duration : NaN;
+        return Number.isFinite(d) && d > 0 ? d : (Number(chip.getAttribute('data-duration')) || 0);
+    }
+    // play the chip (if it is not playing yet), then run fn with its audio once it can jump
+    function withVoicePlaying(chip, fn) {
+        if (voicePlayingChip !== chip || !voiceAudio) toggleVoicePlayback(chip);
+        const a = voiceAudio;
+        if (!a) return;
+        if (a.readyState >= 1) fn(a); else a.addEventListener('loadedmetadata', () => fn(a), { once: true });
+    }
+    function voiceSkip(chip, delta) {
+        withVoicePlaying(chip, (a) => {
+            const len = voiceLength(chip);
+            a.currentTime = Math.max(0, Math.min(len ? len - 0.05 : a.currentTime + delta, a.currentTime + delta));
+        });
+    }
+    function voiceSeekTo(chip, fraction) {
+        withVoicePlaying(chip, (a) => { a.currentTime = Math.max(0, fraction * voiceLength(chip)); });
+    }
+    // chip buttons must not move the text cursor (the sliders must still be draggable)
     editorEl.addEventListener('mousedown', (e) => {
-        if (e.target.closest('.voice-chip') && !e.target.closest('.voice-vol')) e.preventDefault();
+        if (e.target.closest('.voice-chip') && !e.target.closest('.voice-vol, .voice-seek')) e.preventDefault();
     });
     // the volume slider of an audio chip (Text and Collage)
     function chipVolumeInput(slider, done) {
@@ -4259,7 +4288,14 @@ RemminStore.ready.then(() => {
         if (done) done(v);
     }
     editorEl.addEventListener('input', (e) => {
-        if (!e.target.classList || !e.target.classList.contains('voice-vol')) return;
+        if (!e.target.classList) return;
+        if (e.target.classList.contains('voice-seek')) {
+            e.stopImmediatePropagation();
+            const chip = e.target.closest('.voice-chip');
+            if (chip) voiceSeekTo(chip, Number(e.target.value) / 1000);
+            return;
+        }
+        if (!e.target.classList.contains('voice-vol')) return;
         e.stopImmediatePropagation();
         chipVolumeInput(e.target);
     }, true);
@@ -4382,6 +4418,9 @@ RemminStore.ready.then(() => {
         e.preventDefault();
         if (e.target.closest('.voice-handle')) return true;
         if (e.target.closest('.voice-play')) { toggleVoicePlayback(chip); return true; }
+        if (e.target.closest('.voice-back')) { voiceSkip(chip, -15); return true; }
+        if (e.target.closest('.voice-fwd')) { voiceSkip(chip, 15); return true; }
+        if (e.target.closest('.voice-seek, .voice-vol')) return true;
         if (e.target.closest('.voice-loop')) {
             const on = chip.getAttribute('data-loop') !== '1';
             textChipSetLoop(chip, on);
@@ -8956,9 +8995,11 @@ RemminStore.ready.then(() => {
                 el.dataset.id = it.id;
                 el.innerHTML = it.type === 'frame' ? '<div class="cb-frame-title" spellcheck="false"></div>'
                     : it.type === 'image' ? '<img draggable="false" alt="">'
-                    : it.type === 'audio' ? '<span class="voice-chip cb-chip"><button class="voice-play" type="button" title="Play">▶</button>' +
+                    : it.type === 'audio' ? '<span class="voice-chip cb-chip"><button class="voice-back" type="button" title="15 seconds back">⏪</button>' +
+                        '<button class="voice-play" type="button" title="Play">▶</button><button class="voice-fwd" type="button" title="15 seconds forward">⏩</button>' +
+                        '<input class="voice-seek" type="range" min="0" max="1000" value="0" title="Click or drag to go to a moment">' +
                         '<button class="voice-loop" type="button" title="Loop: play again and again">🔁</button>' +
-                        '<input class="voice-vol" type="range" min="0" max="100" value="100" title="Volume"><span class="voice-name"></span><span class="voice-time"></span></span>'
+                        '<span class="voice-vol-icon" title="Volume">🔊</span><input class="voice-vol" type="range" min="0" max="100" value="100" title="Volume"><span class="voice-name"></span><span class="voice-time"></span></span>'
                     : it.type === 'video' ? `<div class="cb-video-bar" title="Drag here to move">▶ Video</div>${isVideoSrc(it.src) ? videoFrameHtml(it.src) : ''}`
                     : '<div class="cb-text"></div>';
                 cbEls.set(it.id, el);
@@ -9070,7 +9111,7 @@ RemminStore.ready.then(() => {
         a = { ...a, src: audioRef(a.src) };
         const p = at || cbViewCenter();
         cbRecord();
-        cbAdd({ type: 'audio', x: p.x - 160, y: p.y - 20, w: 320, h: 40, src: a.src, name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop, ...(a.vol < 100 ? { volume: a.vol } : {}) });
+        cbAdd({ type: 'audio', x: p.x - 220, y: p.y - 20, w: 440, h: 40, src: a.src, name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop, ...(a.vol < 100 ? { volume: a.vol } : {}) });
         cbRender();
         cbSave();
     }
@@ -9086,6 +9127,11 @@ RemminStore.ready.then(() => {
         }
     }
     cbBoard.addEventListener('input', (e) => {
+        if (e.target.classList && e.target.classList.contains('voice-seek')) {
+            const chip = e.target.closest('.voice-chip');
+            if (chip) voiceSeekTo(chip, Number(e.target.value) / 1000);
+            return;
+        }
         if (!e.target.classList || !e.target.classList.contains('voice-vol')) return;
         const el = e.target.closest('.cb-item');
         const it = el && cbById(el.dataset.id);
@@ -9464,9 +9510,9 @@ RemminStore.ready.then(() => {
     cbBoard.addEventListener('pointerdown', (e) => {
         if (!cbActive()) return;
         // the volume slider of an audio item: just the slider (no moving of the item)
-        if (e.target.closest && e.target.closest('.cb-chip .voice-vol')) { e.stopPropagation(); return; }
+        if (e.target.closest && e.target.closest('.cb-chip .voice-vol, .cb-chip .voice-seek')) { e.stopPropagation(); return; }
         // the play / loop buttons of an audio item
-        const chipBtn = e.button === 0 && e.target.closest && e.target.closest('.cb-chip .voice-play, .cb-chip .voice-loop');
+        const chipBtn = e.button === 0 && e.target.closest && e.target.closest('.cb-chip .voice-play, .cb-chip .voice-loop, .cb-chip .voice-back, .cb-chip .voice-fwd');
         if (chipBtn) {
             const el = chipBtn.closest('.cb-item');
             const it = el && cbById(el.dataset.id);
@@ -9475,6 +9521,8 @@ RemminStore.ready.then(() => {
                 e.stopPropagation();
                 const chip = el.querySelector('.cb-chip');
                 if (chipBtn.classList.contains('voice-play')) toggleVoicePlayback(chip);
+                else if (chipBtn.classList.contains('voice-back')) voiceSkip(chip, -15);
+                else if (chipBtn.classList.contains('voice-fwd')) voiceSkip(chip, 15);
                 else { cbRecord(); it.loop = !it.loop; if (voicePlayingChip === chip && voiceAudio) voiceAudio.loop = it.loop; cbRender(); cbSave(); }
                 return;
             }
@@ -11238,6 +11286,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Audio: timeline to click / drag, and 15 s back / forward buttons',
         'Audio stored once (like videos), much faster audio compression, choose the MB size for too-big files',
         'Volume slider on audio; copy / paste pictures between Text, Collage and Draw; files over 25 MB can be compressed first',
         'Compress pictures (right-click) in Text, Collage and Draw; Pictures in the storage overview',

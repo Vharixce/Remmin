@@ -2320,3 +2320,10 @@ video.draw-video-full { position: fixed; left: -10000px; top: 0; width: 10px; he
 
 /* volume slider on audio chips */
 .voice-chip .voice-vol { width: 64px; height: 14px; margin: 0 2px; accent-color: #7c6ff0; cursor: pointer; flex-shrink: 0; }
+
+/* audio: 15 s back / forward and the timeline */
+.voice-chip .voice-back, .voice-chip .voice-fwd { background: transparent; width: 22px; height: 22px; font-size: 11px; opacity: .8; }
+.voice-chip .voice-back:hover, .voice-chip .voice-fwd:hover { opacity: 1; background: rgba(124, 111, 240, .3); }
+.voice-chip .voice-seek { width: 90px; height: 14px; margin: 0 2px; accent-color: #7c6ff0; cursor: pointer; flex-shrink: 1; min-width: 40px; }
+.voice-chip .voice-vol-icon { font-size: 11px; opacity: .75; margin-left: 4px; }
+.voice-chip .voice-vol { width: 48px; }

@@ -2317,3 +2317,6 @@ video.draw-video-full { position: fixed; left: -10000px; top: 0; width: 10px; he
 .so-bits { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .so-size { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 600; flex-shrink: 0; }
 .so-empty { padding: 20px; text-align: center; color: var(--text-dim); }
+
+/* volume slider on audio chips */
+.voice-chip .voice-vol { width: 64px; height: 14px; margin: 0 2px; accent-color: #7c6ff0; cursor: pointer; flex-shrink: 0; }

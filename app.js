@@ -1951,6 +1951,12 @@ RemminStore.ready.then(() => {
     const KLIPY_SRC_RE = /^https:\/\/(?:[a-z0-9-]+\.)*klipy\.(?:com|co)\/[^\s"'<>]+$/i;
     // video files from your own disk: kept in the media store, the notes hold "media:<id>"
     const VIDEO_MAX_MB = 25;
+    const BIG_FILE_MB = 25; // videos, pictures and audio above this get the question to compress them first
+    // a picture file above 25 MB: ask first (it is made smaller, then it fits)
+    async function allowBigPicture(file) {
+        if (typeof file === 'string' || !file || file.size <= BIG_FILE_MB * 1048576) return true;
+        return askConfirm('Picture too big', `${file.name} is ${(file.size / 1048576).toFixed(1)} MB (max ${BIG_FILE_MB} MB). Compress it so it fits in the note?${/gif$/i.test(file.type) ? ' (A GIF this big stops moving.)' : ''}`, 'Compress');
+    }
     const isLocalVideo = (src) => isMediaRef(src);
     const isVideoSrc = (src) => VIDEO_SRC_RE.test(src || '') || isMediaRef(src);
     const resolveVideo = (v) => v;
@@ -2184,6 +2190,44 @@ RemminStore.ready.then(() => {
         const got = mbOf(out);
         toast(`Video compressed: ${now.toFixed(1)} MB → ${got.toFixed(2)} MB${got > target * 1.03 ? ` (a little above ${target} MB: this was the smallest possible)` : ''}`);
     }
+    // audio: played once (silently) into a smaller recording that fits targetBytes
+    async function compressAudioUrl(url, { targetBytes, label = 'audio' }) {
+        const mime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4']
+            .find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+        if (!mime) throw new Error('unsupported');
+        const a = document.createElement('audio');
+        a.preload = 'auto';
+        a.src = url;
+        await new Promise((resolve, reject) => { a.onloadedmetadata = resolve; a.onerror = () => reject(new Error('cannot play')); });
+        const dur = Number.isFinite(a.duration) ? a.duration : 0;
+        const bps = Math.round(Math.max(12000, Math.min(128000, dur ? (targetBytes * 8 * 0.9) / dur : 64000)));
+        const ac = new (window.AudioContext || window.webkitAudioContext)();
+        const node = ac.createMediaElementSource(a);
+        const dest = ac.createMediaStreamDestination();
+        node.connect(dest);
+        await ac.resume();
+        const rec = new MediaRecorder(dest.stream, { mimeType: mime, audioBitsPerSecond: bps });
+        const chunks = [];
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+        const stopped = new Promise((resolve) => { rec.onstop = resolve; });
+        let done = false, cancelled = false;
+        const ui = compressProgress(`Compressing ${label}…`, () => { cancelled = true; finish(); });
+        function finish() { if (done) return; done = true; a.pause(); if (rec.state !== 'inactive') rec.stop(); }
+        a.ontimeupdate = () => { if (dur) ui.set(a.currentTime / dur, `Compressing ${label}… ${Math.round(a.currentTime / dur * 100)}% (keep this tab open)`); };
+        a.onended = finish;
+        try {
+            rec.start(1000);
+            await a.play();
+            await stopped;
+        } finally {
+            ui.close();
+            ac.close().catch(() => {});
+        }
+        if (cancelled) throw new Error('cancelled');
+        const out = await blobToDataUrl(new Blob(chunks, { type: mime.split(';')[0] }));
+        if (!/^data:audio\//.test(out)) throw new Error('failed');
+        return out;
+    }
     // compress a video that is already in a note (all its places get the smaller version)
     async function compressMedia(ref, preset) {
         const id = ref.slice(6);
@@ -2278,9 +2322,26 @@ RemminStore.ready.then(() => {
         const t = preset.targetBytes;
         toast(`Picture compressed: ${fmtSize(sizeOfData(src))} → ${fmtSize(sizeOfData(out))}${t && sizeOfData(out) > t ? ' (the smallest possible)' : ''}`);
     }
+    // copy a picture so it can be pasted in Text, Collage or Draw
+    const PIC_MARK = 'remmin-picture-copy';
+    function copyPictureSrc(src) {
+        const onCopy = (e) => {
+            e.clipboardData.setData('text/html', `<img src="${src.replace(/"/g, '&quot;')}">`);
+            e.clipboardData.setData('text/plain', PIC_MARK);
+            e.preventDefault();
+            e.stopImmediatePropagation();
+        };
+        document.addEventListener('copy', onCopy, true);
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+        document.removeEventListener('copy', onCopy, true);
+        toast(ok ? 'Picture copied: paste it (Ctrl+V) in Text, Collage or Draw' : 'Could not copy the picture');
+    }
+    // all data: pictures in pasted html
+    const pastedPictureSrcs = (html) => [...String(html || '').matchAll(/<img[^>]+src="(data:image\/[^"]+)"/gi)].map((m) => m[1].replace(/&quot;/g, '"'));
     // the options of a picture: compress / undo, download, remove
     function pictureMenuActions(src, { place, remove, x, y }) {
-        const items = [];
+        const items = [{ label: 'Copy picture', icon: '⧉', run: () => copyPictureSrc(src) }];
         const now = fmtSize(sizeOfData(src));
         if (isPictureData(src)) {
             items.push({
@@ -2408,8 +2469,10 @@ RemminStore.ready.then(() => {
                     const name = (child.getAttribute('data-name') || 'Voice note').slice(0, 200);
                     const dur = String(Math.max(0, Math.round(Number(child.getAttribute('data-duration')) || 0)));
                     const loop = child.getAttribute('data-loop') === '1';
+                    const vol = Math.round(Number(child.getAttribute('data-vol')));
                     [...child.attributes].forEach((attr) => child.removeAttribute(attr.name));
                     if (loop) child.setAttribute('data-loop', '1');
+                    if (Number.isFinite(vol) && vol >= 0 && vol < 100) child.setAttribute('data-vol', String(vol));
                     child.setAttribute('data-voice', src);
                     child.setAttribute('data-name', name);
                     child.setAttribute('data-duration', dur);
@@ -2996,7 +3059,7 @@ RemminStore.ready.then(() => {
     let insertingImages = false;
     async function insertImageFiles(files, point) {
         if (!noteById(state.currentNoteId)) return;
-        const images = [...files].filter((f) => f.type.startsWith('image/'));
+        const images = [...files].filter((f) => typeof f === 'string' || f.type.startsWith('image/'));
         if (!images.length || insertingImages) return;
         insertingImages = true; // never handle the same drop / paste twice
         recordText();
@@ -3005,7 +3068,8 @@ RemminStore.ready.then(() => {
         try {
             for (const file of images) {
                 try {
-                    const line = pictureLine(await imageFileToDataUrl(file));
+                    if (!(await allowBigPicture(file))) continue;
+                    const line = pictureLine(typeof file === 'string' ? file : await imageFileToDataUrl(file));
                     if (at.inline) {
                         const img = line.querySelector('img');
                         placeInline(img, at); // next to the other picture(s)
@@ -3094,7 +3158,7 @@ RemminStore.ready.then(() => {
         const copiedVid = pastedVideoRef(e);
         if (copiedVid) { e.preventDefault(); insertVideoInText(copiedVid); return; }
         const copiedAud = pastedAudio(e);
-        if (copiedAud) { e.preventDefault(); insertVoiceChip(copiedAud.src, copiedAud.name, copiedAud.duration, copiedAud.loop); return; }
+        if (copiedAud) { e.preventDefault(); insertVoiceChip(copiedAud.src, copiedAud.name, copiedAud.duration, copiedAud.loop, copiedAud.vol); return; }
         // a YouTube / Vimeo link on its own: embed the video
         const pastedText = dt.getData('text/plain');
         const pastedVideo = !dt.files.length && pastedText && !/\s/.test(pastedText.trim()) && videoEmbedUrl(pastedText);
@@ -3108,6 +3172,12 @@ RemminStore.ready.then(() => {
             return;
         }
         const html = dt.getData('text/html');
+        // pictures copied from the Collage or with "Copy picture"
+        if ((pastedText === PIC_MARK || pastedText === CB_MARK) && pastedPictureSrcs(html).length) {
+            e.preventDefault();
+            insertImageFiles(pastedPictureSrcs(html));
+            return;
+        }
         // a piece copied from the drawing or the grid: insert it like any other picture
         const own = html && /<img[^>]*data-(?:remmin|remindate)-copy[^>]*src="(data:image\/[^"]+)"/i.exec(html);
         if (own) {
@@ -3946,17 +4016,18 @@ RemminStore.ready.then(() => {
 
     const VOICE_SRC_RE = /^data:audio\/[\w.+-]+(;[\w=.+-]+)*;base64,[A-Za-z0-9+/=]+$/i;
     const VOICE_MAX_SECONDS = 10 * 60;
-    const VOICE_MAX_CHARS = 4.5e6; // ~3.3 MB of audio; browser storage is small
+    const VOICE_MAX_CHARS = 25 * 1048576 * 4 / 3 + 200; // 25 MB of audio (stored as text)
 
     function formatSeconds(sec) {
         sec = Math.max(0, Math.round(Number(sec) || 0));
         return `${Math.floor(sec / 60)}:${pad(sec % 60)}`;
     }
 
-    function voiceChipHtml(src, name, duration, loop = false) {
+    function voiceChipHtml(src, name, duration, loop = false, vol = 100) {
         const span = document.createElement('span');
         span.setAttribute('data-voice', src);
         if (loop) span.setAttribute('data-loop', '1');
+        if (vol < 100) span.setAttribute('data-vol', String(vol));
         span.setAttribute('data-name', name || 'Voice note');
         span.setAttribute('data-duration', String(Math.round(duration || 0)));
         span.textContent = `🎤 ${name || 'Voice note'}`;
@@ -3973,10 +4044,18 @@ RemminStore.ready.then(() => {
             chip.innerHTML = `<span class="voice-handle" title="Drag to move">⠿</span>` +
                 `<button class="voice-play" type="button" title="Play">▶</button>` +
                 `<button class="voice-loop${chip.getAttribute('data-loop') === '1' ? ' on' : ''}" type="button" title="Loop: play again and again">🔁</button>` +
+                `<input class="voice-vol" type="range" min="0" max="100" value="${chipVolume(chip)}" title="Volume">` +
                 `<span class="voice-name" title="Click to rename">🎤 ${escapeHtml(name)}</span>` +
                 `<span class="voice-time">${formatSeconds(chip.getAttribute('data-duration'))}</span>` +
                 `<button class="voice-remove" type="button" title="Remove voice note">✕</button>`;
         });
+    }
+
+    // the volume of an audio chip (0–100, 100 when not set)
+    function chipVolume(chip) {
+        const v = chip.getAttribute('data-vol');
+        const n = v === null ? 100 : Math.round(Number(v));
+        return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 100;
     }
 
     /* ---- playback ---- */
@@ -4005,6 +4084,7 @@ RemminStore.ready.then(() => {
         voicePlayingChip = chip;
         voiceAudio = new Audio(chip.getAttribute('data-voice'));
         voiceAudio.loop = chip.getAttribute('data-loop') === '1';
+        voiceAudio.volume = chipVolume(chip) / 100;
         const total = Number(chip.getAttribute('data-duration')) || 0;
         const timeEl = chip.querySelector('.voice-time');
         voiceAudio.addEventListener('timeupdate', () => {
@@ -4017,9 +4097,26 @@ RemminStore.ready.then(() => {
         chip.classList.add('playing');
     }
 
-    // chip buttons must not move the text cursor
+    // chip buttons must not move the text cursor (the volume slider must still be draggable)
     editorEl.addEventListener('mousedown', (e) => {
-        if (e.target.closest('.voice-chip')) e.preventDefault();
+        if (e.target.closest('.voice-chip') && !e.target.closest('.voice-vol')) e.preventDefault();
+    });
+    // the volume slider of an audio chip (Text and Collage)
+    function chipVolumeInput(slider, done) {
+        const chip = slider.closest('.voice-chip');
+        if (!chip) return;
+        const v = Math.round(Number(slider.value));
+        if (v >= 100) chip.removeAttribute('data-vol'); else chip.setAttribute('data-vol', String(v));
+        if (voicePlayingChip === chip && voiceAudio) voiceAudio.volume = v / 100;
+        if (done) done(v);
+    }
+    editorEl.addEventListener('input', (e) => {
+        if (!e.target.classList || !e.target.classList.contains('voice-vol')) return;
+        e.stopImmediatePropagation();
+        chipVolumeInput(e.target);
+    }, true);
+    editorEl.addEventListener('change', (e) => {
+        if (e.target.classList && e.target.classList.contains('voice-vol')) markTextChanged();
     });
 
     /* ---- move a voice note by dragging its handle (mouse and touch) ---- */
@@ -4185,14 +4282,14 @@ RemminStore.ready.then(() => {
         }
     }
 
-    function insertVoiceChip(src, name, duration, loop = false) {
+    function insertVoiceChip(src, name, duration, loop = false, vol = 100) {
         if (!noteById(state.currentNoteId)) return;
         if (src.length > VOICE_MAX_CHARS) {
             toast('This recording is too large to store. Keep voice notes under a few minutes.');
             return;
         }
         ensureCaretInEditor();
-        const html = voiceChipHtml(src, name, duration, loop) + '&nbsp;';
+        const html = voiceChipHtml(src, name, duration, loop, vol) + '&nbsp;';
         if (!document.execCommand('insertHTML', false, html)) {
             const tmp = document.createElement('span');
             tmp.innerHTML = html;
@@ -4223,10 +4320,29 @@ RemminStore.ready.then(() => {
         });
     }
 
+    // an audio file as text to store; more than 25 MB: compress it first (when you want)
+    async function audioFileToStorable(file) {
+        if (file.size <= BIG_FILE_MB * 1048576) {
+            const src = await blobToDataUrl(file);
+            if (src.length <= VOICE_MAX_CHARS) return src;
+        }
+        const ok = await askConfirm('Audio too big', `${file.name} is ${(file.size / 1048576).toFixed(1)} MB (max ${BIG_FILE_MB} MB). Compress it so it fits in the note? This takes about as long as the audio lasts; keep this tab open.`, 'Compress');
+        if (!ok) return null;
+        const url = URL.createObjectURL(file);
+        try {
+            const out = await compressAudioUrl(url, { targetBytes: (BIG_FILE_MB - 1) * 1048576, label: file.name });
+            if (out.length > VOICE_MAX_CHARS) { toast(`${file.name} is still too big after compressing (too long)`); return null; }
+            return out;
+        } catch (err) {
+            toast(err && err.message === 'cancelled' ? 'Compressing stopped' : err && err.message === 'unsupported' ? 'This browser cannot compress audio' : `Could not compress ${file.name}`);
+            return null;
+        } finally { URL.revokeObjectURL(url); }
+    }
     async function insertAudioFiles(files) {
         for (const file of [...files].filter((f) => f.type.startsWith('audio/'))) {
             try {
-                const src = await blobToDataUrl(file);
+                const src = await audioFileToStorable(file);
+                if (!src) continue;
                 if (!VOICE_SRC_RE.test(src)) throw new Error('unsupported');
                 insertVoiceChip(src, file.name.replace(/\.[^.]+$/, ''), await audioDuration(src));
             } catch (_) {
@@ -4238,7 +4354,7 @@ RemminStore.ready.then(() => {
     /* ---- the options of an audio chip (Text and Collage), copy / paste ---- */
     const AUDIO_COPY_RE = /^\[Remmin audio\] (\{[\s\S]*\})$/;
     function copyAudio(a) {
-        const text = `[Remmin audio] ${JSON.stringify({ name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop, src: a.src })}`;
+        const text = `[Remmin audio] ${JSON.stringify({ name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop, vol: a.vol, src: a.src })}`;
         if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(text).then(() => toast('Audio copied: paste it (Ctrl+V) in Text or Collage, in any note'), () => toast('Could not copy the audio'));
         } else toast('Could not copy the audio');
@@ -4249,7 +4365,8 @@ RemminStore.ready.then(() => {
         if (!m) return null;
         try {
             const a = JSON.parse(m[1]);
-            return a && typeof a.src === 'string' && VOICE_SRC_RE.test(a.src) ? { src: a.src, name: String(a.name || 'Voice note').slice(0, 200), duration: Number(a.duration) || 0, loop: !!a.loop } : null;
+            const vol = Math.round(Number(a.vol));
+            return a && typeof a.src === 'string' && VOICE_SRC_RE.test(a.src) ? { src: a.src, name: String(a.name || 'Voice note').slice(0, 200), duration: Number(a.duration) || 0, loop: !!a.loop, vol: Number.isFinite(vol) && vol >= 0 && vol < 100 ? vol : 100 } : null;
         } catch (_) { return null; }
     }
     function downloadAudio(src, name) {
@@ -4262,7 +4379,7 @@ RemminStore.ready.then(() => {
     // chip: the chip on screen; o: { loop, setLoop, rename, remove }
     function audioMenuActions(chip, o) {
         const playing = voicePlayingChip === chip && voiceAudio && !voiceAudio.paused;
-        const a = { src: chip.getAttribute('data-voice'), name: chip.getAttribute('data-name'), duration: Number(chip.getAttribute('data-duration')) || 0, loop: o.loop };
+        const a = { src: chip.getAttribute('data-voice'), name: chip.getAttribute('data-name'), duration: Number(chip.getAttribute('data-duration')) || 0, loop: o.loop, vol: chipVolume(chip) };
         return [
             { label: playing ? 'Pause' : 'Play', icon: playing ? '⏸' : '▶', run: () => toggleVoicePlayback(chip) },
             { label: o.loop ? 'Loop off' : 'Loop on (play again and again)', icon: '🔁', run: o.setLoop },
@@ -7570,7 +7687,8 @@ RemminStore.ready.then(() => {
         let added = null;
         for (const [i, file] of files.entries()) {
             let src;
-            try { src = await imageFileToDataUrl(file); } catch (err) { toast('Could not read that picture'); continue; }
+            if (!(await allowBigPicture(file))) continue;
+            try { src = typeof file === 'string' ? file : await imageFileToDataUrl(file); } catch (err) { toast('Could not read that picture'); continue; }
             const img = drawImageEl(src);
             if (!img.complete || !img.naturalWidth) {
                 await new Promise((resolve) => { img.addEventListener('load', resolve, { once: true }); img.addEventListener('error', resolve, { once: true }); });
@@ -7642,6 +7760,8 @@ RemminStore.ready.then(() => {
             }
             // a picture copied from the text part of a note, from the grid, or from a web page
             const html = e.clipboardData ? e.clipboardData.getData('text/html') : '';
+            const pics = (mark === PIC_MARK || mark === CB_MARK) ? pastedPictureSrcs(html) : [];
+            if (pics.length && !isPrivateLocked(noteById(state.currentNoteId))) { e.preventDefault(); addDrawImages(pics); return; }
             const m = html && /<img[^>]+src="(data:image\/[^"]+)"/i.exec(html);
             if (m && !isPrivateLocked(noteById(state.currentNoteId))) {
                 e.preventDefault();
@@ -8686,7 +8806,8 @@ RemminStore.ready.then(() => {
                 el.innerHTML = it.type === 'frame' ? '<div class="cb-frame-title" spellcheck="false"></div>'
                     : it.type === 'image' ? '<img draggable="false" alt="">'
                     : it.type === 'audio' ? '<span class="voice-chip cb-chip"><button class="voice-play" type="button" title="Play">▶</button>' +
-                        '<button class="voice-loop" type="button" title="Loop: play again and again">🔁</button><span class="voice-name"></span><span class="voice-time"></span></span>'
+                        '<button class="voice-loop" type="button" title="Loop: play again and again">🔁</button>' +
+                        '<input class="voice-vol" type="range" min="0" max="100" value="100" title="Volume"><span class="voice-name"></span><span class="voice-time"></span></span>'
                     : it.type === 'video' ? `<div class="cb-video-bar" title="Drag here to move">▶ Video</div>${isVideoSrc(it.src) ? videoFrameHtml(it.src) : ''}`
                     : '<div class="cb-text"></div>';
                 cbEls.set(it.id, el);
@@ -8705,6 +8826,10 @@ RemminStore.ready.then(() => {
                 chip.setAttribute('data-name', it.name || 'Voice note');
                 chip.setAttribute('data-duration', String(Math.round(it.duration || 0)));
                 if (it.loop) chip.setAttribute('data-loop', '1'); else chip.removeAttribute('data-loop');
+                const vol = Number.isFinite(it.volume) ? it.volume : 100;
+                if (vol < 100) chip.setAttribute('data-vol', String(vol)); else chip.removeAttribute('data-vol');
+                const slider = chip.querySelector('.voice-vol');
+                if (document.activeElement !== slider) slider.value = String(vol);
                 chip.querySelector('.voice-loop').classList.toggle('on', !!it.loop);
                 const nm = `🎤 ${it.name || 'Voice note'}`;
                 if (chip.querySelector('.voice-name').textContent !== nm) chip.querySelector('.voice-name').textContent = nm;
@@ -8793,20 +8918,30 @@ RemminStore.ready.then(() => {
         if (a.src.length > VOICE_MAX_CHARS) { toast('This recording is too large to store. Keep voice notes under a few minutes.'); return; }
         const p = at || cbViewCenter();
         cbRecord();
-        cbAdd({ type: 'audio', x: p.x - 140, y: p.y - 20, w: 280, h: 40, src: a.src, name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop });
+        cbAdd({ type: 'audio', x: p.x - 160, y: p.y - 20, w: 320, h: 40, src: a.src, name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop, ...(a.vol < 100 ? { volume: a.vol } : {}) });
         cbRender();
         cbSave();
     }
     async function cbAddAudioFiles(files, at) {
         for (const [i, file] of [...files].filter((f) => f.type.startsWith('audio/')).entries()) {
             try {
-                const src = await blobToDataUrl(file);
+                const src = await audioFileToStorable(file);
+                if (!src) continue;
                 if (!VOICE_SRC_RE.test(src)) throw new Error('unsupported');
                 const p = at || cbViewCenter();
                 cbAddAudio({ src, name: file.name.replace(/\.[^.]+$/, ''), duration: await audioDuration(src) }, { x: p.x + i * 20, y: p.y + i * 50 });
             } catch (_) { toast(`Could not add audio: ${file.name}`); }
         }
     }
+    cbBoard.addEventListener('input', (e) => {
+        if (!e.target.classList || !e.target.classList.contains('voice-vol')) return;
+        const el = e.target.closest('.cb-item');
+        const it = el && cbById(el.dataset.id);
+        if (it) chipVolumeInput(e.target, (v) => { if (v >= 100) delete it.volume; else it.volume = v; });
+    });
+    cbBoard.addEventListener('change', (e) => {
+        if (e.target.classList && e.target.classList.contains('voice-vol')) cbSave();
+    });
     function cbAudioActions(it, chip) {
         return audioMenuActions(chip, {
             loop: !!it.loop,
@@ -8839,6 +8974,7 @@ RemminStore.ready.then(() => {
         const added = [];
         for (const file of images) {
             try {
+                if (!(await allowBigPicture(file))) continue;
                 const src = typeof file === 'string' ? file : await imageFileToDataUrl(file);
                 const img = new Image();
                 img.src = src;
@@ -9175,6 +9311,8 @@ RemminStore.ready.then(() => {
 
     cbBoard.addEventListener('pointerdown', (e) => {
         if (!cbActive()) return;
+        // the volume slider of an audio item: just the slider (no moving of the item)
+        if (e.target.closest && e.target.closest('.cb-chip .voice-vol')) { e.stopPropagation(); return; }
         // the play / loop buttons of an audio item
         const chipBtn = e.button === 0 && e.target.closest && e.target.closest('.cb-chip .voice-play, .cb-chip .voice-loop');
         if (chipBtn) {
@@ -9565,6 +9703,9 @@ RemminStore.ready.then(() => {
         const ids = cbExpanded(cb.sel);
         cbClipboard = cbClone(cb.items.filter((it) => ids.has(it.id)));
         e.clipboardData.setData('text/plain', CB_MARK);
+        // the pictures also as html, so they can be pasted in Text and Draw
+        const pics = cbClipboard.filter((it) => it.type === 'image' && typeof it.src === 'string' && it.src.startsWith('data:image/'));
+        if (pics.length) e.clipboardData.setData('text/html', pics.map((it) => `<img src="${it.src.replace(/"/g, '&quot;')}">`).join(''));
         e.preventDefault();
         if (cut) cbDelete();
     }
@@ -9591,6 +9732,8 @@ RemminStore.ready.then(() => {
         const text = e.clipboardData.getData('text/plain');
         if (text === CB_MARK && cbClipboard) { cbPaste(cbClipboard); return; }
         const html = e.clipboardData.getData('text/html');
+        const pics = pastedPictureSrcs(html);
+        if (pics.length > 1 || (pics.length && text === PIC_MARK)) { cbAddImages(pics); return; }
         const m = html && /<img[^>]+src="(data:image\/[^"]+)"/i.exec(html);
         if (m) {
             fetch(m[1].replace(/&quot;/g, '"')).then((r) => r.blob())
@@ -10943,6 +11086,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Volume slider on audio; copy / paste pictures between Text, Collage and Draw; files over 25 MB can be compressed first',
         'Compress pictures (right-click) in Text, Collage and Draw; Pictures in the storage overview',
         'Click the storage bars: see which notes use the most space (after your Private Note Pass)',
         'Undo the compression of a video (right-click, for 7 days on this device)',

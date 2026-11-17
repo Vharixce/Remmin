@@ -2257,3 +2257,9 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .broadcast-info .bi-list { margin: 0; padding-left: 22px; font-size: 13px; line-height: 1.6; max-height: 220px; overflow: auto; }
 .broadcast-info .bi-list li.new { font-weight: 600; }
 .broadcast-info .bi-list li.new::after { content: 'new'; margin-left: 8px; padding: 0 6px; border-radius: 6px; font-size: 10px; font-weight: 700; background: #7c3aed; color: #fff; vertical-align: middle; }
+
+/* video files from your own disk */
+.video-embed video { display: block; width: 100%; max-height: 70vh; background: #000; border-radius: 0 0 8px 8px; cursor: auto; }
+.cb-video video { flex: 1; width: 100%; min-height: 0; object-fit: contain; background: #000; }
+.collage-board.panning .cb-video video, .collage-board[data-tool]:not([data-tool="select"]) .cb-video video,
+.cb-video:not(.selected) video, .ctrl-held .cb-video video { pointer-events: none; }

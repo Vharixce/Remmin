@@ -2202,6 +2202,123 @@ RemminStore.ready.then(() => {
         toast(`Video compressed: ${mbOf(before).toFixed(1)} MB → ${mbOf(out).toFixed(1)} MB`);
     }
 
+    /* ---- compressing a picture (Text, Collage, Draw): smaller size and/or lower quality ---- */
+    const IMG_PRESETS = [
+        { label: 'Good quality (max 1920 px)', maxDim: 1920, quality: 0.85 },
+        { label: 'Smaller (max 1280 px)', maxDim: 1280, quality: 0.75 },
+        { label: 'Smallest (max 800 px)', maxDim: 800, quality: 0.6 }
+    ];
+    const IMG_ORIG_KEY = 'remmin.imgOrig.v1';
+    let imgOrig = null; // hash of the compressed picture → { data, at } (originals, only on this device, 7 days)
+    function imgOrigs() {
+        if (!imgOrig) {
+            imgOrig = {};
+            const saved = readJSON(IMG_ORIG_KEY, {});
+            if (saved && typeof saved === 'object') Object.entries(saved).forEach(([k, o]) => {
+                if (o && typeof o.data === 'string' && Date.now() - (o.at || 0) < 7 * 86400000) imgOrig[k] = o;
+            });
+        }
+        return imgOrig;
+    }
+    const sizeOfData = (d) => Math.round((d || '').length * 0.75);
+    const isPictureData = (src) => typeof src === 'string' && /^data:image\/(?:png|jpe?g|webp|bmp|avif)/i.test(src.slice(0, 30));
+    function loadImg(src) {
+        return new Promise((resolve, reject) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = () => reject(new Error('bad picture')); im.src = src; });
+    }
+    function hasAlpha(im) {
+        const c = document.createElement('canvas');
+        const w = c.width = Math.min(64, im.naturalWidth), h = c.height = Math.min(64, im.naturalHeight);
+        const g = c.getContext('2d');
+        g.drawImage(im, 0, 0, w, h);
+        const d = g.getImageData(0, 0, w, h).data;
+        for (let i = 3; i < d.length; i += 4) if (d[i] < 250) return true;
+        return false;
+    }
+    function encodeImg(im, maxDim, quality, alpha) {
+        const scale = Math.min(1, maxDim / Math.max(im.naturalWidth, im.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(im.naturalWidth * scale));
+        c.height = Math.max(1, Math.round(im.naturalHeight * scale));
+        const g = c.getContext('2d');
+        if (!alpha) { g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); }
+        g.drawImage(im, 0, 0, c.width, c.height);
+        const webp = c.toDataURL('image/webp', quality);
+        if (/^data:image\/webp/.test(webp)) return webp;
+        return alpha ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', quality);
+    }
+    // preset: { maxDim, quality } or { targetBytes }
+    async function compressPictureData(src, preset) {
+        const im = await loadImg(src);
+        const alpha = hasAlpha(im);
+        if (!preset.targetBytes) return encodeImg(im, preset.maxDim, preset.quality, alpha);
+        // to a size: lower the quality first, then the size, until it fits
+        let dim = Math.max(im.naturalWidth, im.naturalHeight);
+        let best = null;
+        for (let round = 0; round < 8; round++) {
+            for (const q of [0.85, 0.7, 0.55, 0.4]) {
+                const out = encodeImg(im, dim, q, alpha);
+                if (!best || out.length < best.length) best = out;
+                if (sizeOfData(out) <= preset.targetBytes) return out;
+            }
+            dim = Math.max(32, Math.round(dim * 0.75));
+        }
+        return best;
+    }
+    // compress one picture; place(newSrc) puts the result where the picture is
+    async function compressPicture(src, preset, place) {
+        if (!isPictureData(src)) { toast(/^data:image\/gif/i.test(src || '') ? 'GIFs are not compressed (they would stop moving)' : 'This picture cannot be compressed'); return; }
+        let out;
+        try { out = await compressPictureData(src, preset); } catch (_) { toast('Could not compress this picture'); return; }
+        if (!out || out.length >= src.length * 0.97) { toast(`Not smaller after compressing: kept the original (${fmtSize(sizeOfData(src))})`); return; }
+        const origs = imgOrigs();
+        const key = mediaHash(out);
+        origs[key] = { data: (origs[mediaHash(src)] || {}).data || src, at: Date.now() }; // after compressing twice: still the first original
+        writeJSON(IMG_ORIG_KEY, origs);
+        place(out);
+        const t = preset.targetBytes;
+        toast(`Picture compressed: ${fmtSize(sizeOfData(src))} → ${fmtSize(sizeOfData(out))}${t && sizeOfData(out) > t ? ' (the smallest possible)' : ''}`);
+    }
+    // the options of a picture: compress / undo, download, remove
+    function pictureMenuActions(src, { place, remove, x, y }) {
+        const items = [];
+        const now = fmtSize(sizeOfData(src));
+        if (isPictureData(src)) {
+            items.push({
+                label: `Compress picture… (now ${now})`, icon: '🗜',
+                run: () => setTimeout(() => menuAt(x, y, 'Compress to', [
+                    { label: `Compress to … KB (now ${now})`, icon: '✎', run: async () => {
+                        const cur = sizeOfData(src) / 1024;
+                        const answer = await askDialog({ title: 'Compress to … KB', message: `How many KB may the picture be? Now it is ${now}; enter a smaller number (1000 KB = about 1 MB).`, input: String(Math.max(10, Math.round(cur / 2))), okLabel: 'Compress' });
+                        if (answer === null || answer === false) return;
+                        const kb = parseFloat(String(answer).replace(',', '.'));
+                        if (!Number.isFinite(kb) || kb <= 0) { toast('Enter a number of KB, for example 300'); return; }
+                        if (kb >= cur) { toast(`Enter a number below ${Math.round(cur)} KB`); return; }
+                        compressPicture(src, { targetBytes: kb * 1024 }, place);
+                    } },
+                    ...IMG_PRESETS.map((pr) => ({ label: pr.label, icon: '🗜', run: () => compressPicture(src, pr, place) }))
+                ]), 0)
+            });
+            const orig = imgOrigs()[mediaHash(src)];
+            if (orig) {
+                items.push({ label: `Undo compression (back to ${fmtSize(sizeOfData(orig.data))})`, icon: '↺', run: () => {
+                    delete imgOrigs()[mediaHash(src)];
+                    writeJSON(IMG_ORIG_KEY, imgOrigs());
+                    place(orig.data);
+                    toast('Compression undone');
+                } });
+            }
+        } else if (/^data:image\/gif/i.test(src || '')) items.push({ label: 'GIFs cannot be compressed (they would stop moving)', icon: 'ℹ', run: () => {} });
+        items.push({ label: 'Download picture', icon: '⬇', run: () => {
+            const a = document.createElement('a');
+            a.href = src;
+            a.download = `picture.${((/^data:image\/([\w+]+)/.exec(src) || [])[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg')}`;
+            if (!/^data:/.test(src)) a.target = '_blank';
+            document.body.appendChild(a); a.click(); a.remove();
+        } });
+        if (remove) items.push({ label: 'Remove picture', icon: '🗑', danger: true, run: remove });
+        return items;
+    }
+
     /* ---- copy a video to paste it in Text, Collage or Draw (also in another note) ---- */
     const VIDEO_COPY_RE = /^\[Remmin video\] (\S+)$/;
     function copyVideo(src) {
@@ -3146,6 +3263,16 @@ RemminStore.ready.then(() => {
         });
     }
     editorEl.addEventListener('contextmenu', (e) => {
+        const img = e.target.closest && e.target.closest('img');
+        if (img && editorEl.contains(img) && !img.closest('.video-embed')) {
+            e.preventDefault();
+            menuAt(e.clientX, e.clientY, 'Picture', pictureMenuActions(img.getAttribute('src') || '', {
+                x: e.clientX, y: e.clientY,
+                place: (src) => { if (!editorEl.contains(img)) return; recordText(); img.src = src; markTextChanged(); },
+                remove: () => { recordText(); selectImage(null); img.remove(); markTextChanged(); }
+            }));
+            return;
+        }
         const video = e.target.closest && e.target.closest('.video-embed');
         if (!video || !editorEl.contains(video)) return;
         e.preventDefault();
@@ -7562,6 +7689,14 @@ RemminStore.ready.then(() => {
         if (e.pointerType === 'mouse' && e.button === 2) {
             const pic = pictureAt(pointerPos(e, true));
             if (pic && pic.video) { drawVideoMenu(pic, e.clientX, e.clientY); return; }
+            if (pic && pic.image) {
+                menuAt(e.clientX, e.clientY, 'Picture', pictureMenuActions(pic.image, {
+                    x: e.clientX, y: e.clientY,
+                    place: (src) => { if (!state.draw.strokes.includes(pic)) return; pushDrawUndo(); pic.image = src; renderStrokes(); flushEditor(); },
+                    remove: () => { pushDrawUndo(); state.draw.strokes = state.draw.strokes.filter((st) => st !== pic); if (drawSel === pic) drawSel = null; renderStrokes(); flushEditor(); }
+                }));
+                return;
+            }
         }
         if (isEraseButton(e)) {
             if (state.draw.drawing || drawSelDrag || pickDrag || marquee) return;
@@ -9051,6 +9186,22 @@ RemminStore.ready.then(() => {
                 const chip = el.querySelector('.cb-chip');
                 if (chipBtn.classList.contains('voice-play')) toggleVoicePlayback(chip);
                 else { cbRecord(); it.loop = !it.loop; if (voicePlayingChip === chip && voiceAudio) voiceAudio.loop = it.loop; cbRender(); cbSave(); }
+                return;
+            }
+        }
+        // right-click on a picture: compress / undo, download, remove
+        const imgEl = e.button === 2 && e.target.closest && e.target.closest('.cb-image');
+        if (imgEl) {
+            const it = cbById(imgEl.dataset.id);
+            if (it) {
+                e.preventDefault();
+                cb.sel = new Set([it.id]);
+                cbRender();
+                menuAt(e.clientX, e.clientY, 'Picture', pictureMenuActions(it.src, {
+                    x: e.clientX, y: e.clientY,
+                    place: (src) => { if (!cb.items.includes(it)) return; cbRecord(); it.src = src; cbRender(); cbSave(); },
+                    remove: () => { cb.sel = new Set([it.id]); cbDelete(); }
+                }));
                 return;
             }
         }
@@ -10792,6 +10943,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Compress pictures (right-click) in Text, Collage and Draw; Pictures in the storage overview',
         'Click the storage bars: see which notes use the most space (after your Private Note Pass)',
         'Undo the compression of a video (right-click, for 7 days on this device)',
         'Compress a video to a size you choose (… MB)',
@@ -12300,16 +12452,28 @@ RemminStore.ready.then(() => {
 
     /* ---- click the storage bars: which notes use the most space (after the Private Note Pass) ---- */
     const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+    // the pictures (data:image) inside a piece of a note
+    function pictureBytes(v) {
+        const text = v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v);
+        let n = 0;
+        const re = /data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+/g;
+        let m;
+        while ((m = re.exec(text))) n += m[0].length;
+        return n;
+    }
     function noteSizes(note) {
         const len = (v) => (v === undefined || v === null ? 0 : typeof v === 'string' ? v.length : JSON.stringify(v).length);
+        const drawParts = [note.strokes, note.grids, note.gridBgs, note.drawing];
+        const pics = { Text: pictureBytes(note.html), Draw: drawParts.reduce((t, v) => t + pictureBytes(v), 0), Collage: pictureBytes(note.collage) };
         const parts = {
-            Text: len(note.html),
-            Draw: len(note.strokes) + len(note.grids) + len(note.gridBgs) + len(note.drawing),
-            Collage: len(note.collage),
-            Project: len(note.project)
+            Text: len(note.html) - pics.Text,
+            Draw: drawParts.reduce((t, v) => t + len(v), 0) - pics.Draw,
+            Collage: len(note.collage) - pics.Collage,
+            Project: len(note.project),
+            Pictures: pics.Text + pics.Draw + pics.Collage
         };
         const all = len(note);
-        parts.Other = Math.max(0, all - parts.Text - parts.Draw - parts.Collage - parts.Project);
+        parts.Other = Math.max(0, all - parts.Text - parts.Draw - parts.Collage - parts.Project - parts.Pictures);
         const ids = new Set();
         const re = /media:([a-z0-9]{4,40})/g;
         const text = JSON.stringify(note);
@@ -12324,12 +12488,14 @@ RemminStore.ready.then(() => {
         // how many notes use each video (a video used by several notes is stored once)
         const users = new Map();
         rows.forEach((r) => r.ids.forEach((id) => users.set(id, (users.get(id) || 0) + 1)));
-        const notesTotal = rows.reduce((t, r) => t + r.total - r.videos, 0);
+        const picturesTotal = rows.reduce((t, r) => t + r.parts.Pictures, 0);
+        const notesTotal = rows.reduce((t, r) => t + r.total - r.videos - r.parts.Pictures, 0);
         const videosTotal = Object.values(state.media).reduce((t, v) => t + v.length, 0);
         const trashTotal = JSON.stringify(state.trash || []).length;
         const max = rows.length ? rows[0].total : 1;
         $('storageSummary').innerHTML = `
-            <div class="so-row-sum"><span>Notes</span><b>${fmtSize(notesTotal)}</b></div>
+            <div class="so-row-sum"><span>Notes (without pictures / videos)</span><b>${fmtSize(notesTotal)}</b></div>
+            <div class="so-row-sum"><span>Pictures</span><b>${fmtSize(picturesTotal)}</b></div>
             <div class="so-row-sum"><span>Videos (each stored once)</span><b>${fmtSize(videosTotal)}</b></div>
             <div class="so-row-sum"><span>Trash</span><b>${fmtSize(trashTotal)}</b></div>`;
         $('storageList').innerHTML = rows.length ? rows.map((r, i) => {

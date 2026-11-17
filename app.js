@@ -10792,6 +10792,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Click the storage bars: see which notes use the most space (after your Private Note Pass)',
         'Undo the compression of a video (right-click, for 7 days on this device)',
         'Compress a video to a size you choose (… MB)',
         'Loop option for videos (right-click) in Text, Collage and Draw',
@@ -12296,6 +12297,78 @@ RemminStore.ready.then(() => {
         updateStorageMeters();
     }
     RemminStore.onChange(updateStorageMeters);
+
+    /* ---- click the storage bars: which notes use the most space (after the Private Note Pass) ---- */
+    const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+    function noteSizes(note) {
+        const len = (v) => (v === undefined || v === null ? 0 : typeof v === 'string' ? v.length : JSON.stringify(v).length);
+        const parts = {
+            Text: len(note.html),
+            Draw: len(note.strokes) + len(note.grids) + len(note.gridBgs) + len(note.drawing),
+            Collage: len(note.collage),
+            Project: len(note.project)
+        };
+        const all = len(note);
+        parts.Other = Math.max(0, all - parts.Text - parts.Draw - parts.Collage - parts.Project);
+        const ids = new Set();
+        const re = /media:([a-z0-9]{4,40})/g;
+        const text = JSON.stringify(note);
+        let m;
+        while ((m = re.exec(text))) ids.add(m[1]);
+        let videos = 0;
+        ids.forEach((id) => { videos += (state.media[id] || '').length; });
+        return { parts, videos, ids, total: all + videos };
+    }
+    function renderStorageOverview() {
+        const rows = state.notes.map((n) => ({ note: n, ...noteSizes(n) })).sort((a, b) => b.total - a.total);
+        // how many notes use each video (a video used by several notes is stored once)
+        const users = new Map();
+        rows.forEach((r) => r.ids.forEach((id) => users.set(id, (users.get(id) || 0) + 1)));
+        const notesTotal = rows.reduce((t, r) => t + r.total - r.videos, 0);
+        const videosTotal = Object.values(state.media).reduce((t, v) => t + v.length, 0);
+        const trashTotal = JSON.stringify(state.trash || []).length;
+        const max = rows.length ? rows[0].total : 1;
+        $('storageSummary').innerHTML = `
+            <div class="so-row-sum"><span>Notes</span><b>${fmtSize(notesTotal)}</b></div>
+            <div class="so-row-sum"><span>Videos (each stored once)</span><b>${fmtSize(videosTotal)}</b></div>
+            <div class="so-row-sum"><span>Trash</span><b>${fmtSize(trashTotal)}</b></div>`;
+        $('storageList').innerHTML = rows.length ? rows.map((r, i) => {
+            const shared = [...r.ids].filter((id) => (users.get(id) || 0) > 1).length;
+            const bits = [...Object.entries(r.parts), ['Videos', r.videos]].filter(([, v]) => v >= 1024)
+                .map(([k, v]) => `${k} ${fmtSize(v)}`).join(' · ');
+            return `<button type="button" class="so-item" data-id="${escapeHtml(r.note.id)}">
+                <span class="so-rank">${i + 1}</span>
+                <span class="so-main">
+                    <span class="so-title">${escapeHtml(markTitle(r.note, r.note.title) || 'Untitled')}</span>
+                    <span class="so-bar"><span style="width:${Math.max(1, r.total / max * 100).toFixed(1)}%"></span></span>
+                    <span class="so-bits">${escapeHtml(bits || 'almost nothing')}${shared ? ` · ${shared} video${shared > 1 ? 's' : ''} also used in other notes` : ''}</span>
+                </span>
+                <span class="so-size">${fmtSize(r.total)}</span>
+            </button>`;
+        }).join('') : '<div class="so-empty">No notes yet</div>';
+    }
+    $('storageMeters').addEventListener('click', async () => {
+        if (!privatePass) {
+            toast("Set your 'Private Note Pass' in Settings first: it is needed to see this", { label: 'Open Settings', onClick: () => openSettings('pass') });
+            return;
+        }
+        const pass = await askDialog({ title: 'Storage overview', message: 'Enter your Private Note Pass to see which notes use the most space.', input: '', password: true, okLabel: 'Show' });
+        $('dialogInput').type = 'text';
+        if (pass === null || pass === false || pass === '') return;
+        if (!(await checkPass(pass))) { toast('Wrong pass'); return; }
+        flushEditor();
+        renderStorageOverview();
+        openModal('storageModal');
+    });
+    $('storageList').addEventListener('click', (e) => {
+        const row = e.target.closest('.so-item');
+        if (!row) return;
+        closeModals();
+        setTab('note');
+        selectNote(row.dataset.id);
+    });
+    $('storageClose').addEventListener('click', closeModals);
+    $('storageBackdrop').addEventListener('click', closeModals);
 
     /* ---------------- start ---------------- */
 

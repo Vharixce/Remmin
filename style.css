@@ -2298,3 +2298,22 @@ video.missing { min-height: 120px; }
 .draw-video-controls .dvc-vol { width: 64px; flex-shrink: 0; accent-color: #7c6ff0; }
 .draw-video-controls .dvc-time { font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
 video.draw-video-full { position: fixed; left: -10000px; top: 0; width: 10px; height: 10px; }
+
+/* storage overview (click the storage bars) */
+.storage-meters { cursor: pointer; border-radius: 6px; }
+.storage-meters:hover { background: rgba(255, 255, 255, .04); }
+.storage-overview { width: min(560px, 94vw); max-height: 86vh; display: flex; flex-direction: column; }
+.so-summary { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.so-row-sum { flex: 1; min-width: 120px; padding: 8px 10px; border-radius: 8px; background: rgba(255, 255, 255, .05); display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text-dim); }
+.so-row-sum b { font-size: 15px; color: var(--text); font-weight: 600; }
+.so-list { overflow: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 2px; }
+.so-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 8px 10px; border-radius: 8px; border: 1px solid transparent; background: rgba(255, 255, 255, .03); color: var(--text); cursor: pointer; font: inherit; }
+.so-item:hover { border-color: var(--primary); background: rgba(124, 111, 240, .1); }
+.so-rank { width: 20px; text-align: right; color: var(--text-dim); font-size: 12px; flex-shrink: 0; }
+.so-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.so-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.so-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .07); overflow: hidden; }
+.so-bar > span { display: block; height: 100%; background: var(--primary); border-radius: 2px; }
+.so-bits { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.so-size { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 600; flex-shrink: 0; }
+.so-empty { padding: 20px; text-align: center; color: var(--text-dim); }

@@ -43,7 +43,7 @@
                 </div>
             </div>
 
-            <div class="storage-meters">
+            <div class="storage-meters" id="storageMeters" title="Click: which notes use the most space">
                 <div class="storage-meter" hidden id="meterGithub">
                     <div class="storage-meter-top"><span class="storage-meter-name">GitHub (server)</span><span class="storage-meter-num"></span></div>
                     <div class="storage-meter-bar"><div class="storage-meter-fill"></div></div>
@@ -447,6 +447,18 @@
                 <button class="btn" id="planFromTreeCancel">Cancel</button>
                 <button class="btn btn-primary" id="planFromTreeSave">Save</button>
             </div>
+        </div>
+    </div>
+
+    <div class="modal" id="storageModal">
+        <div class="modal-backdrop" id="storageBackdrop"></div>
+        <div class="modal-content storage-overview">
+            <div class="modal-header">
+                <div>💾 What uses the most space</div>
+                <button class="icon-btn" id="storageClose" title="Close">&times;</button>
+            </div>
+            <div class="so-summary" id="storageSummary"></div>
+            <div class="so-list" id="storageList"></div>
         </div>
     </div>
 

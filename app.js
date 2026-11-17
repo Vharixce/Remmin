@@ -187,6 +187,7 @@ RemminStore.ready.then(() => {
         deleted: 'remmin.deleted.v1',
         trash: 'remmin.trash.v1',
         trashGone: 'remmin.trashGone.v1',
+        media: 'remmin.media.v1',
         updatedAt: 'remmin.updatedAt.v1',
         github: 'remmin.github.v1',
         server: 'remmin.server.v1'
@@ -237,6 +238,8 @@ RemminStore.ready.then(() => {
         updatedAt: null,
         // Recently deleted notes on this device: [{ note, deletedAt }]
         trash: [],
+        // video files: id → data:video text (stored once, used by "media:<id>" in the notes)
+        media: {},
         currentNoteId: null,
         currentFolderId: null,
         calendarCursor: new Date(),
@@ -283,6 +286,7 @@ RemminStore.ready.then(() => {
     RemminStore.onError(reportSaveError);
 
     function load() {
+        state.media = validMedia(readJSON(STORAGE.media, {}));
         state.notes = readJSON(STORAGE.notes, []);
         state.folders = readJSON(STORAGE.folders, []);
         state.prefs = Object.assign(state.prefs, readJSON(STORAGE.prefs, {}));
@@ -301,6 +305,69 @@ RemminStore.ready.then(() => {
 
         state.notes.forEach(migrateNote);
         state.folders.forEach(migrateFolder);
+        state.trash.forEach((t) => { if (t && t.note) migrateNoteMedia(t.note); });
+        // forget video files that no note (or the trash) uses any more
+        const kept = pickMedia(state.media, state.notes, state.trash);
+        if (Object.keys(kept).length !== Object.keys(state.media).length) { state.media = kept; scheduleSaveMedia(); }
+    }
+
+    /* ---------------- video files (media) ----------------
+     * A video file from your disk is stored once in state.media (id → data:video text) and synced in remmin.json.
+     * Text, Collage and Draw only keep "media:<id>", so the same video in several places takes no extra space.
+     * (Function declarations only: these are used while the notes are loaded.) */
+    function mediaHash(str) {
+        let h1 = 0x811c9dc5, h2 = 5381;
+        for (let i = 0; i < str.length; i++) {
+            const c = str.charCodeAt(i);
+            h1 = Math.imul(h1 ^ c, 16777619);
+            h2 = (Math.imul(h2, 33) + c) | 0;
+        }
+        return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36) + str.length.toString(36);
+    }
+    function mediaIdFor(dataUrl) {
+        const id = `v${mediaHash(dataUrl)}`;
+        if (!state.media[id]) { state.media[id] = dataUrl; scheduleSaveMedia(); }
+        return `media:${id}`;
+    }
+    function isMediaRef(v) { return typeof v === 'string' && /^media:[a-z0-9]{4,40}$/.test(v); }
+    function mediaData(ref) { return isMediaRef(ref) ? (state.media[ref.slice(6)] || '') : ''; }
+    function scheduleSaveMedia() {
+        clearTimeout(state.mediaTimer);
+        state.mediaTimer = setTimeout(() => writeJSON(STORAGE.media, state.media), 400);
+    }
+    function validMedia(m) {
+        const out = {};
+        if (!m || typeof m !== 'object' || Array.isArray(m)) return out;
+        Object.entries(m).forEach(([k, v]) => {
+            if (/^[a-z0-9]{4,40}$/.test(k) && typeof v === 'string' && /^data:video\/[\w.+-]+;base64,/i.test(v.slice(0, 80))) out[k] = v;
+        });
+        return out;
+    }
+    // video data written straight into a note (the first version did that): move it to the media store
+    function migrateNoteMedia(value) {
+        if (Array.isArray(value)) { value.forEach((v, i) => { if (typeof v === 'string') value[i] = migrateMediaString(v); else if (v && typeof v === 'object') migrateNoteMedia(v); }); return; }
+        if (!value || typeof value !== 'object') return;
+        Object.keys(value).forEach((k) => {
+            const v = value[k];
+            if (typeof v === 'string') value[k] = migrateMediaString(v);
+            else if (v && typeof v === 'object') migrateNoteMedia(v);
+        });
+    }
+    function migrateMediaString(v) {
+        if (v.startsWith('data:video/')) return mediaIdFor(v);
+        if (v.length > 200 && v.includes('data-video="data:video/')) return v.replace(/data-video="(data:video\/[^"]+)"/g, (m, d) => `data-video="${mediaIdFor(d)}"`);
+        return v;
+    }
+    // the media used by these notes and trash; only those are kept and synced
+    function pickMedia(media, notes, trash) {
+        const used = new Set();
+        const re = /media:([a-z0-9]{4,40})/g;
+        const text = JSON.stringify([notes || [], (trash || []).map((t) => t && t.note)]);
+        let m;
+        while ((m = re.exec(text))) used.add(m[1]);
+        const out = {};
+        used.forEach((id) => { if (media && media[id]) out[id] = media[id]; });
+        return out;
     }
 
     function normalizeDeleted(d) {
@@ -379,6 +446,7 @@ RemminStore.ready.then(() => {
         '#86b4ff': '#202937', '#c59cff': '#2b2037', '#2b2b2b': '#000000' };
     const OLD_PASTELS = [[/#ffadad|rgb\(255,\s*173,\s*173\)/gi, '#ff9494'], [/#ffd6a5|rgb\(255,\s*214,\s*165\)/gi, '#ffca8c'], [/#fdffb6|rgb\(253,\s*255,\s*182\)/gi, '#fcff9c'], [/#caffbf|rgb\(202,\s*255,\s*191\)/gi, '#b5ffa6'], [/#a0c4ff|rgb\(160,\s*196,\s*255\)/gi, '#86b4ff'], [/#d4b5ff|rgb\(212,\s*181,\s*255\)/gi, '#c59cff']];
     function migrateNote(note) {
+        migrateNoteMedia(note);
         note.id = note.id || uid();
         note.title = note.title || '';
         note.content = note.content || '';
@@ -709,7 +777,7 @@ RemminStore.ready.then(() => {
     }
 
     function noteItemHtml(note) {
-        const preview = note.private ? '🔒 Private note' : note.content.trim()
+        const preview = note.private ? 'Private note' : note.content.trim()
             ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
             : (hasImages(note) ? 'Image' : hasVoice(note) ? 'Voice note' : note.strokes.length ? 'Drawing'
                 : Object.values(note.grids || {}).some((g) => g && Object.keys(g).length) ? 'Grid'
@@ -1414,7 +1482,7 @@ RemminStore.ready.then(() => {
             return;
         }
         host.innerHTML = state.trash.map((t) => {
-            const preview = t.note.private ? '🔒 Private note' : (t.note.content || '').replace(/\s+/g, ' ').trim().slice(0, 70) ||
+            const preview = t.note.private ? 'Private note' : (t.note.content || '').replace(/\s+/g, ' ').trim().slice(0, 70) ||
                 ((t.note.strokes || []).length ? 'Drawing' : 'Empty note');
             return `<div class="trash-item">
                 <div class="trash-text">
@@ -1557,7 +1625,8 @@ RemminStore.ready.then(() => {
         if (s.image) {
             return {
                 image: s.image, x: s.x, y: s.y, w: s.w, h: s.h, points: [], ...(s.fill ? { fill: true } : {}),
-                ...(typeof s.video === 'string' && /^data:video\/[\w.+-]+;base64,/i.test(s.video.slice(0, 80)) ? { video: s.video } : {})
+                ...(typeof s.video === 'string' && /^(?:media:[a-z0-9]{4,40}$|data:video\/[\w.+-]+;base64,)/i.test(s.video.slice(0, 80)) ? { video: s.video } : {}),
+                ...(s.video && s.muted ? { muted: true } : {})
             };
         }
         return {
@@ -1839,43 +1908,223 @@ RemminStore.ready.then(() => {
     // embedded videos (YouTube / Vimeo players) and KLIPY GIFs shown from KLIPY
     const VIDEO_SRC_RE = /^https:\/\/(?:www\.youtube-nocookie\.com\/embed\/[A-Za-z0-9_-]{11}(?:\?start=\d+)?|player\.vimeo\.com\/video\/\d+)$/;
     const KLIPY_SRC_RE = /^https:\/\/(?:[a-z0-9-]+\.)*klipy\.(?:com|co)\/[^\s"'<>]+$/i;
-    // video files from your own disk, stored inside the note (as data: text)
-    const LOCAL_VIDEO_RE = /^data:video\/[\w.+-]+;base64,[A-Za-z0-9+/]/i;
+    // video files from your own disk: kept in the media store, the notes hold "media:<id>"
     const VIDEO_MAX_MB = 25;
-    // big video data is passed around in the editor as a short reference ("vref:…")
-    const videoRefs = new Map(), videoRefOf = new Map(), videoBlobUrls = new Map();
-    function videoRef(src) {
-        let r = videoRefOf.get(src);
-        if (!r) { r = `vref:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`; videoRefOf.set(src, r); videoRefs.set(r, src); }
-        return r;
-    }
-    const resolveVideo = (v) => (typeof v === 'string' && v.startsWith('vref:') ? (videoRefs.get(v) || '') : v);
-    const isLocalVideo = (src) => typeof src === 'string' && LOCAL_VIDEO_RE.test(src.slice(0, 80));
-    const isVideoSrc = (src) => VIDEO_SRC_RE.test(src || '') || isLocalVideo(src);
+    const isLocalVideo = (src) => isMediaRef(src);
+    const isVideoSrc = (src) => VIDEO_SRC_RE.test(src || '') || isMediaRef(src);
+    const resolveVideo = (v) => v;
+    const videoRef = (v) => v;
     const isVideoFile = (f) => !!f && (/^video\//.test(f.type) || /\.(mp4|m4v|webm|mov|ogv)$/i.test(f.name || ''));
-    function videoFileToDataUrl(file) {
+    const mbOf = (dataUrl) => (dataUrl.length * 0.75 / 1048576);
+    function blobToDataUrl(blob) {
         return new Promise((resolve, reject) => {
-            if (file.size > VIDEO_MAX_MB * 1024 * 1024) { reject(new Error('too big')); return; }
             const reader = new FileReader();
-            reader.onload = () => {
-                let src = String(reader.result || '');
-                // some systems give .mov / .mkv files no type: name it a video so it can be played
-                src = src.replace(/^data:(?:application\/octet-stream|);base64,/, `data:${/\.webm$/i.test(file.name) ? 'video/webm' : 'video/mp4'};base64,`);
-                src = src.replace(/^data:video\/quicktime;/, 'data:video/mp4;'); // most .mov files play as mp4
-                if (isLocalVideo(src)) resolve(src); else reject(new Error('not a video'));
-            };
+            reader.onload = () => resolve(String(reader.result || ''));
             reader.onerror = () => reject(reader.error);
-            reader.readAsDataURL(file);
+            reader.readAsDataURL(blob);
         });
     }
-    // reads dropped video files; too big or broken ones get a message
+    async function videoFileToDataUrl(file) {
+        let src = await blobToDataUrl(file);
+        // some systems give .mov / .mkv files no type: name it a video so it can be played
+        src = src.replace(/^data:(?:application\/octet-stream|);base64,/, `data:${/\.webm$/i.test(file.name) ? 'video/webm' : 'video/mp4'};base64,`);
+        src = src.replace(/^data:video\/quicktime;/, 'data:video/mp4;'); // most .mov files play as mp4
+        if (!/^data:video\/[\w.+-]+;base64,/i.test(src.slice(0, 80))) throw new Error('not a video');
+        return src;
+    }
+    // reads dropped video files into the media store → their "media:<id>"; too big ones can be compressed first
     async function readVideoFiles(files) {
         const out = [];
         for (const f of files) {
-            try { out.push(await videoFileToDataUrl(f)); }
-            catch (err) { toast(err && err.message === 'too big' ? `${f.name} is too big (max ${VIDEO_MAX_MB} MB per video)` : `Could not read ${f.name}`); }
+            try {
+                if (f.size > VIDEO_MAX_MB * 1048576) {
+                    const ok = await askConfirm('Video too big', `${f.name} is ${(f.size / 1048576).toFixed(1)} MB (max ${VIDEO_MAX_MB} MB per video). Compress it so it fits? This takes about as long as the video lasts; keep this tab open.`, 'Compress');
+                    if (!ok) continue;
+                    const url = URL.createObjectURL(f);
+                    try {
+                        const data = await compressVideoUrl(url, { ...COMPRESS_PRESETS[1], maxBytes: VIDEO_MAX_MB * 1048576 * 0.95, label: f.name });
+                        if (data.length * 0.75 > VIDEO_MAX_MB * 1048576) { toast(`${f.name} is still too big after compressing`); continue; }
+                        out.push(mediaIdFor(data));
+                    } finally { URL.revokeObjectURL(url); }
+                    continue;
+                }
+                out.push(mediaIdFor(await videoFileToDataUrl(f)));
+            } catch (err) {
+                if (err && err.message === 'cancelled') { toast('Compressing stopped'); continue; }
+                toast(`Could not add ${f.name}${err && err.message === 'unsupported' ? ': this browser cannot compress videos' : ''}`);
+            }
         }
         return out;
+    }
+    // a playable address for a media video (made once per video)
+    const mediaUrls = new Map(); // id → { url, len }
+    async function mediaUrl(ref) {
+        const data = mediaData(ref);
+        if (!data) throw new Error('missing');
+        const id = ref.slice(6);
+        const c = mediaUrls.get(id);
+        if (c && c.len === data.length) return c.url;
+        const blob = await (await fetch(data)).blob();
+        const again = mediaUrls.get(id);
+        if (again && again.len === data.length) return again.url;
+        if (again) URL.revokeObjectURL(again.url);
+        const url = URL.createObjectURL(blob);
+        mediaUrls.set(id, { url, len: data.length });
+        return url;
+    }
+    // a video's data changed (compressed / synced): reload every player of it
+    function refreshMediaPlayers(id) {
+        const c = mediaUrls.get(id);
+        if (c) { URL.revokeObjectURL(c.url); mediaUrls.delete(id); }
+        document.querySelectorAll(`video[data-media="media:${id}"]`).forEach((v) => { v.removeAttribute('src'); v.load(); hydrateLocalVideos(v); });
+        if (typeof dropDrawVideo === 'function') dropDrawVideo(`media:${id}`);
+    }
+
+    /* ---- compressing a video: played once (muted) into a smaller recording ---- */
+    const COMPRESS_PRESETS = [
+        { label: 'Good quality (720p)', maxH: 720, bitrate: 1600000 },
+        { label: 'Smaller (480p)', maxH: 480, bitrate: 800000 },
+        { label: 'Smallest (360p)', maxH: 360, bitrate: 420000 }
+    ];
+    let compressBox = null;
+    function compressProgress(text, onCancel) {
+        if (!compressBox) {
+            compressBox = document.createElement('div');
+            compressBox.className = 'compress-box';
+            compressBox.innerHTML = '<span class="compress-text"></span><div class="compress-bar"><div></div></div><button type="button" class="btn compress-cancel">Stop</button>';
+            document.body.appendChild(compressBox);
+        }
+        compressBox.hidden = false;
+        compressBox.querySelector('.compress-text').textContent = text;
+        compressBox.querySelector('.compress-bar > div').style.width = '0%';
+        compressBox.querySelector('.compress-cancel').onclick = onCancel;
+        return {
+            set: (f, t) => { compressBox.querySelector('.compress-bar > div').style.width = `${Math.round(Math.min(1, Math.max(0, f)) * 100)}%`; if (t) compressBox.querySelector('.compress-text').textContent = t; },
+            close: () => { compressBox.hidden = true; }
+        };
+    }
+    async function compressVideoUrl(url, { maxH = 720, bitrate = 1600000, maxBytes = 0, label = 'video' } = {}) {
+        const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
+            .find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+        if (!mime || !HTMLCanvasElement.prototype.captureStream) throw new Error('unsupported');
+        const v = document.createElement('video');
+        v.playsInline = true; v.preload = 'auto';
+        v.src = url;
+        await new Promise((resolve, reject) => { v.onloadedmetadata = resolve; v.onerror = () => reject(new Error('cannot play')); });
+        const dur = Number.isFinite(v.duration) ? v.duration : 0;
+        let rate = bitrate;
+        if (maxBytes && dur) rate = Math.max(150000, Math.min(bitrate, (maxBytes * 8 * 0.9) / dur - 96000));
+        const scale = Math.min(1, maxH / (v.videoHeight || maxH));
+        const w = Math.max(2, Math.round((v.videoWidth || 640) * scale / 2) * 2), h = Math.max(2, Math.round((v.videoHeight || 360) * scale / 2) * 2);
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const g = c.getContext('2d');
+        const stream = c.captureStream(30);
+        // the sound goes into the recording, not to the speakers
+        let ac = null;
+        try {
+            ac = new (window.AudioContext || window.webkitAudioContext)();
+            const node = ac.createMediaElementSource(v);
+            const dest = ac.createMediaStreamDestination();
+            node.connect(dest);
+            dest.stream.getAudioTracks().forEach((t) => stream.addTrack(t));
+            await ac.resume();
+        } catch (_) { v.muted = true; }
+        const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: Math.round(rate), audioBitsPerSecond: 96000 });
+        const chunks = [];
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+        const stopped = new Promise((resolve) => { rec.onstop = resolve; });
+        let done = false, cancelled = false;
+        const ui = compressProgress(`Compressing ${label}…`, () => { cancelled = true; finish(); });
+        function finish() { if (done) return; done = true; v.pause(); if (rec.state !== 'inactive') rec.stop(); }
+        const frame = () => {
+            if (done) return;
+            g.drawImage(v, 0, 0, w, h);
+            if (dur) ui.set(v.currentTime / dur, `Compressing ${label}… ${Math.round(v.currentTime / dur * 100)}% (keep this tab open)`);
+            if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(frame); else requestAnimationFrame(frame);
+        };
+        v.onended = finish;
+        try {
+            rec.start(1000);
+            await v.play();
+            frame();
+            await stopped;
+        } finally {
+            ui.close();
+            if (ac) ac.close().catch(() => {});
+            stream.getTracks().forEach((t) => t.stop());
+        }
+        if (cancelled) throw new Error('cancelled');
+        const out = await blobToDataUrl(new Blob(chunks, { type: mime.split(';')[0] }));
+        if (!/^data:video\//.test(out)) throw new Error('failed');
+        return out;
+    }
+    // compress a video that is already in a note (all its places get the smaller version)
+    async function compressMedia(ref, preset) {
+        const id = ref.slice(6);
+        const before = state.media[id];
+        if (!before) return;
+        let out;
+        try { out = await compressVideoUrl(await mediaUrl(ref), { ...preset, label: 'video' }); }
+        catch (err) { toast(err && err.message === 'cancelled' ? 'Compressing stopped' : err && err.message === 'unsupported' ? 'This browser cannot compress videos' : 'Could not compress this video'); return; }
+        if (out.length >= before.length * 0.95) { toast(`Not smaller after compressing (${mbOf(before).toFixed(1)} MB): kept the original`); return; }
+        state.media[id] = out;
+        scheduleSaveMedia();
+        refreshMediaPlayers(id);
+        markChanged();
+        scheduleGithubSave();
+        toast(`Video compressed: ${mbOf(before).toFixed(1)} MB → ${mbOf(out).toFixed(1)} MB`);
+    }
+
+    /* ---- copy a video to paste it in Text, Collage or Draw (also in another note) ---- */
+    const VIDEO_COPY_RE = /^\[Remmin video\] (\S+)$/;
+    function copyVideo(src) {
+        const text = `[Remmin video] ${src}`;
+        const done = () => toast('Video copied: paste it (Ctrl+V) in Text, Collage or Draw, in any note');
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => toast('Could not copy the video'));
+        else toast('Could not copy the video');
+    }
+    function pastedVideoRef(e) {
+        const t = e.clipboardData ? e.clipboardData.getData('text/plain').trim() : '';
+        const m = VIDEO_COPY_RE.exec(t);
+        return m && isVideoSrc(m[1]) ? m[1] : null;
+    }
+    function downloadVideo(ref) {
+        mediaUrl(ref).then((url) => {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `video.${/^data:video\/webm/.test(mediaData(ref)) ? 'webm' : 'mp4'}`;
+            document.body.appendChild(a); a.click(); a.remove();
+        }).catch(() => toast('This video is not on this device yet'));
+    }
+    // a menu at a point on the screen (right-click)
+    const pointAnchor = document.createElement('span');
+    pointAnchor.className = 'point-anchor';
+    document.body.appendChild(pointAnchor);
+    function menuAt(x, y, title, actions) {
+        pointAnchor.style.left = `${x}px`;
+        pointAnchor.style.top = `${y}px`;
+        closeMenu();
+        showMenu(pointAnchor, title, actions);
+    }
+    // the same video options in Text, Collage and Draw
+    function videoMenuActions(src, { remove, sizes, sizeNow, sound, playing } = {}) {
+        const items = [{ label: 'Copy video', icon: '⧉', run: () => copyVideo(src) }];
+        if (isMediaRef(src)) {
+            items.push({ label: 'Download video', icon: '⬇', run: () => downloadVideo(src) });
+            const data = mediaData(src);
+            items.push({
+                label: `Compress video…${data ? ` (now ${mbOf(data).toFixed(1)} MB)` : ''}`, icon: '🗜',
+                run: () => setTimeout(() => menuAt(parseFloat(pointAnchor.style.left) || 200, parseFloat(pointAnchor.style.top) || 200, 'Compress to',
+                    COMPRESS_PRESETS.map((pr) => ({ label: pr.label, icon: '🗜', run: () => compressMedia(src, pr) }))), 0)
+            });
+        } else items.push({ label: 'Open on the website', icon: '↗', run: () => window.open(videoWatchUrl(src), '_blank', 'noopener') });
+        if (sizes) [[25, '1/4'], [50, '1/2'], [75, '3/4'], [100, 'Full width']].forEach(([w, name]) =>
+            items.push({ label: `Size ${name}${sizeNow === w ? ' ✓' : ''}`, icon: '↔', run: () => sizes(w) }));
+        if (playing) items.push({ label: playing.on ? 'Pause' : 'Play', icon: playing.on ? '⏸' : '▶', run: playing.toggle });
+        if (sound) items.push({ label: sound.on ? 'Sound off' : 'Sound on', icon: sound.on ? '🔇' : '🔊', run: sound.toggle });
+        if (remove) items.push({ label: 'Remove video', icon: '🗑', danger: true, run: remove });
+        return items;
     }
     const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'TEMPLATE', 'META', 'LINK', 'TITLE', 'svg', 'SVG']);
 
@@ -1900,8 +2149,8 @@ RemminStore.ready.then(() => {
                 if (child.nodeType !== 1 || DROP_TAGS.has(child.tagName)) { child.remove(); return; }
                 // an embedded YouTube / Vimeo video (only these two players are allowed)
                 if (child.tagName === 'DIV' && child.hasAttribute('data-video')) {
-                    const src = resolveVideo(child.getAttribute('data-video') || '');
-                    if (isVideoSrc(src)) child.replaceWith(videoBlock(doc, src)); else child.remove();
+                    const src = child.getAttribute('data-video') || '';
+                    if (isVideoSrc(src)) child.replaceWith(videoBlock(doc, src, Number(child.getAttribute('data-w')))); else child.remove();
                     return;
                 }
                 clean(child);
@@ -1911,7 +2160,9 @@ RemminStore.ready.then(() => {
                     if (!VOICE_SRC_RE.test(src)) { child.remove(); return; }
                     const name = (child.getAttribute('data-name') || 'Voice note').slice(0, 200);
                     const dur = String(Math.max(0, Math.round(Number(child.getAttribute('data-duration')) || 0)));
+                    const loop = child.getAttribute('data-loop') === '1';
                     [...child.attributes].forEach((attr) => child.removeAttribute(attr.name));
+                    if (loop) child.setAttribute('data-loop', '1');
                     child.setAttribute('data-voice', src);
                     child.setAttribute('data-name', name);
                     child.setAttribute('data-duration', dur);
@@ -2592,6 +2843,9 @@ RemminStore.ready.then(() => {
         if (!dt) return;
         // in Draw / Grid the text is hidden (but may still have the focus): leave the paste to them
         if (state.prefs.mode !== 'text') return;
+        // a video copied with "Copy video"
+        const copiedVid = pastedVideoRef(e);
+        if (copiedVid) { e.preventDefault(); insertVideoInText(copiedVid); return; }
         // a YouTube / Vimeo link on its own: embed the video
         const pastedText = dt.getData('text/plain');
         const pastedVideo = !dt.files.length && pastedText && !/\s/.test(pastedText.trim()) && videoEmbedUrl(pastedText);
@@ -2625,8 +2879,14 @@ RemminStore.ready.then(() => {
         (typeof draggedCalendarNote !== 'undefined' && draggedCalendarNote));
     editorEl.addEventListener('dragover', (e) => {
         if (draggingAppItem()) { e.dataTransfer.dropEffect = 'none'; return; }
-        if (!movingNoteImg && !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+        if (!movingNoteImg && !movingNoteVideo && !Array.from(e.dataTransfer.types || []).includes('Files')) return;
         e.preventDefault();
+        if (movingNoteVideo) {
+            e.dataTransfer.dropEffect = 'move';
+            const full = editorEl.clientWidth || 1;
+            showDropOutline(dropTarget(e.clientX, e.clientY), 9 / 16, Math.min(100, movingNoteVideo.getBoundingClientRect().width / full * 100));
+            return;
+        }
         const aspect = movingNoteImg && movingNoteImg.naturalWidth ? movingNoteImg.naturalHeight / movingNoteImg.naturalWidth : 0.66;
         const pct = movingNoteImg ? parseFloat(movingNoteImg.style.width) || 24 : lastImgSize();
         showDropOutline(dropTarget(e.clientX, e.clientY), aspect, pct);
@@ -2640,13 +2900,39 @@ RemminStore.ready.then(() => {
     // which used to add a second copy. Remember the picture and just move it instead.
     let movingNoteImg = null;
     editorEl.addEventListener('dragstart', (e) => {
+        const video = e.target && e.target.closest && e.target.closest('.video-embed');
+        if (video && editorEl.contains(video)) {
+            movingNoteVideo = video;
+            movingNoteImg = null;
+            e.dataTransfer.setData('text/plain', '');
+            return;
+        }
         const img = e.target && e.target.closest && e.target.closest('img');
         movingNoteImg = img && editorEl.contains(img) ? img : null;
     });
-    editorEl.addEventListener('dragend', () => { movingNoteImg = null; hideDropOutline(); });
+    editorEl.addEventListener('dragend', () => {
+        if (movingNoteVideo) { movingNoteVideo.draggable = false; videoMovedAt = Date.now(); }
+        movingNoteImg = null; movingNoteVideo = null; hideDropOutline();
+    });
 
     editorEl.addEventListener('drop', (e) => {
         if (draggingAppItem()) { e.preventDefault(); return; }
+        if (movingNoteVideo) {
+            const video = movingNoteVideo;
+            movingNoteVideo = null;
+            video.draggable = false;
+            e.preventDefault();
+            e.stopPropagation();
+            hideDropOutline();
+            if (!editorEl.contains(video)) return;
+            const point = dropTarget(e.clientX, e.clientY);
+            const target = point.inline ? { before: point.line && point.line.nextSibling } : point;
+            if (target.before === video || target.before === video.nextSibling) return; // same place
+            recordText();
+            placeLine(video, target);
+            markTextChanged();
+            return;
+        }
         if (movingNoteImg) {
             const img = movingNoteImg;
             movingNoteImg = null;
@@ -2706,8 +2992,65 @@ RemminStore.ready.then(() => {
         $('imageTools').dataset.count = selectedImgs.length > 1 ? `${selectedImgs.length} pictures` : '';
     }
 
+    // the options of a video in the text
+    function textVideoActions(video) {
+        const src = video.getAttribute('data-video');
+        return videoMenuActions(src, {
+            remove: () => { recordText(); video.remove(); markTextChanged(); },
+            sizeNow: Number(video.getAttribute('data-w')) || 0,
+            sizes: (w) => { recordText(); video.setAttribute('data-w', String(w)); video.style.width = `${w}%`; markTextChanged(); }
+        });
+    }
+    editorEl.addEventListener('contextmenu', (e) => {
+        const video = e.target.closest && e.target.closest('.video-embed');
+        if (!video || !editorEl.contains(video)) return;
+        e.preventDefault();
+        menuAt(e.clientX, e.clientY, 'Video', textVideoActions(video));
+    });
+    /* move a video in the text: drag its top bar; resize: drag the corner */
+    let movingNoteVideo = null;
+    let videoMovedAt = 0;
+    editorEl.addEventListener('pointerdown', (e) => {
+        const video = e.target.closest && e.target.closest('.video-embed');
+        if (!video || !editorEl.contains(video) || e.button !== 0) return;
+        const handle = e.target.closest('.ve-handle');
+        if (handle) {
+            e.preventDefault();
+            e.stopPropagation();
+            const style = getComputedStyle(editorEl);
+            const full = editorEl.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+            const startW = video.getBoundingClientRect().width;
+            const x0 = e.clientX;
+            let changed = false;
+            recordText();
+            try { handle.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+            const move = (ev) => {
+                let pct = Math.max(15, Math.min(100, (startW + ev.clientX - x0) / full * 100));
+                const snap = [25, 50, 75, 100].find((s) => Math.abs(s - pct) < 3);
+                if (snap) pct = snap;
+                pct = Math.round(pct);
+                video.style.width = `${pct}%`;
+                video.setAttribute('data-w', String(pct));
+                changed = true;
+            };
+            const up = () => {
+                handle.removeEventListener('pointermove', move);
+                handle.removeEventListener('pointerup', up);
+                handle.removeEventListener('pointercancel', up);
+                videoMovedAt = Date.now();
+                if (changed) markTextChanged();
+            };
+            handle.addEventListener('pointermove', move);
+            handle.addEventListener('pointerup', up);
+            handle.addEventListener('pointercancel', up);
+            return;
+        }
+        // the bar above the player (where "▶ Video" is) moves the video
+        video.draggable = e.clientY - video.getBoundingClientRect().top < 24;
+    });
     editorEl.addEventListener('click', (e) => {
         if (e.target.closest('.voice-chip')) { handleVoiceChipClick(e); return; }
+
         const link = e.target.closest('a[href]');
         if (link && editorEl.contains(link) && !window.getSelection().toString()) {
             e.preventDefault();
@@ -2715,14 +3058,10 @@ RemminStore.ready.then(() => {
             return;
         }
         const video = e.target.closest('.video-embed');
-        if (video && editorEl.contains(video) && e.target.tagName !== 'VIDEO') {
-            const src = resolveVideo(video.getAttribute('data-video'));
-            showMenu(video, 'Video', [
-                isLocalVideo(src)
-                    ? { label: 'Download video', icon: '⬇', run: () => { const a = document.createElement('a'); a.href = src; a.download = `video.${/^data:video\/webm/.test(src) ? 'webm' : 'mp4'}`; a.click(); } }
-                    : { label: 'Open on the website', icon: '↗', run: () => window.open(videoWatchUrl(src), '_blank', 'noopener') },
-                { label: 'Remove video', icon: '🗑', danger: true, run: () => { recordText(); video.remove(); markTextChanged(); } }
-            ]);
+        if (video && editorEl.contains(video) && e.target.tagName !== 'VIDEO' && !e.target.closest('.ve-handle')) {
+            if (Date.now() - videoMovedAt < 400) return;
+            const r = video.getBoundingClientRect();
+            menuAt(Math.min(e.clientX, r.right), e.clientY, 'Video', textVideoActions(video));
             return;
         }
         const img = e.target.closest('img');
@@ -2791,7 +3130,7 @@ RemminStore.ready.then(() => {
         box.innerHTML = editorEl.innerHTML;
         box.querySelectorAll('[data-voice]').forEach((v) => { v.replaceWith(document.createTextNode('🎤 [voice note]')); });
         box.querySelectorAll('[data-video]').forEach((v) => {
-            if (isLocalVideo(resolveVideo(v.getAttribute('data-video')))) { v.replaceWith(document.createTextNode('▶ [video]')); return; }
+            if (isMediaRef(v.getAttribute('data-video'))) { v.replaceWith(document.createTextNode('▶ [video]')); return; }
             const url = videoWatchUrl(v.getAttribute('data-video'));
             const line = document.createElement('div');
             const a = document.createElement('a');
@@ -3044,39 +3383,31 @@ RemminStore.ready.then(() => {
         m = /player\.vimeo\.com\/video\/(\d+)/.exec(src);
         return m ? `https://vimeo.com/${m[1]}` : src;
     }
-    // inText: the video's data stays only on the box (data-video); the player gets it when it is shown
-    function videoFrameHtml(src, inText = false) {
-        if (isLocalVideo(src)) return inText ? '<video controls playsinline preload="metadata"></video>' : `<video src="${escapeHtml(src)}" controls playsinline preload="metadata"></video>`;
+    function videoFrameHtml(src) {
+        if (isMediaRef(src)) return `<video data-media="${escapeHtml(src)}" controls playsinline preload="metadata"></video>`;
         return `<iframe src="${escapeHtml(src)}" title="Video" loading="lazy" allowfullscreen ` +
             'allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin"></iframe>';
     }
-    function videoBlock(doc, src) {
+    // w: width in % of the note (empty = the normal size)
+    function videoBlock(doc, src, w) {
         const box = doc.createElement('div');
-        box.className = `video-embed${isLocalVideo(src) ? ' local' : ''}`;
+        box.className = `video-embed${isMediaRef(src) ? ' local' : ''}`;
         box.setAttribute('data-video', src);
         box.setAttribute('contenteditable', 'false');
-        box.innerHTML = videoFrameHtml(src, true);
+        const pct = Math.round(Number(w));
+        if (pct >= 10 && pct <= 100) { box.setAttribute('data-w', String(pct)); box.style.width = `${pct}%`; }
+        box.innerHTML = `${videoFrameHtml(src)}<span class="ve-handle" title="Drag to resize"></span>`;
         return box;
     }
-    // give the players of video files in the text their video (whenever text is shown)
+    // players of video files get their video when they are shown
     function hydrateLocalVideos(root) {
         if (!root || !root.querySelectorAll) return;
-        const boxes = root.matches && root.matches('.video-embed.local') ? [root] : root.querySelectorAll('.video-embed.local');
-        boxes.forEach((box) => {
-            const v = box.querySelector('video');
-            const raw = box.getAttribute('data-video') || '';
-            const src = resolveVideo(raw);
-            if (!isLocalVideo(src)) return;
-            const ref = videoRef(src);
-            if (raw !== ref) box.setAttribute('data-video', ref); // the editor only keeps the short reference
-            if (!v || v.getAttribute('src')) return;
-            const url = videoBlobUrls.get(ref);
-            if (url) { v.src = url; return; }
-            fetch(src).then((r) => r.blob()).then((blob) => {
-                const u = videoBlobUrls.get(ref) || URL.createObjectURL(blob);
-                videoBlobUrls.set(ref, u);
-                if (!v.getAttribute('src')) v.src = u;
-            }).catch(() => {});
+        const list = root.matches && root.matches('video[data-media]') ? [root] : root.querySelectorAll('video[data-media]');
+        list.forEach((v) => {
+            if (v.getAttribute('src')) return;
+            const ref = v.getAttribute('data-media');
+            mediaUrl(ref).then((url) => { if (!v.getAttribute('src')) v.src = url; })
+                .catch(() => { v.classList.add('missing'); v.title = 'This video is not on this device yet (sync to get it)'; });
         });
     }
     new MutationObserver((list) => {
@@ -3368,6 +3699,7 @@ RemminStore.ready.then(() => {
             const name = chip.getAttribute('data-name') || 'Voice note';
             chip.innerHTML = `<span class="voice-handle" title="Drag to move">⠿</span>` +
                 `<button class="voice-play" type="button" title="Play">▶</button>` +
+                `<button class="voice-loop${chip.getAttribute('data-loop') === '1' ? ' on' : ''}" type="button" title="Loop: play again and again">🔁</button>` +
                 `<span class="voice-name" title="Click to rename">🎤 ${escapeHtml(name)}</span>` +
                 `<span class="voice-time">${formatSeconds(chip.getAttribute('data-duration'))}</span>` +
                 `<button class="voice-remove" type="button" title="Remove voice note">✕</button>`;
@@ -3399,6 +3731,7 @@ RemminStore.ready.then(() => {
         stopVoicePlayback();
         voicePlayingChip = chip;
         voiceAudio = new Audio(chip.getAttribute('data-voice'));
+        voiceAudio.loop = chip.getAttribute('data-loop') === '1';
         const total = Number(chip.getAttribute('data-duration')) || 0;
         const timeEl = chip.querySelector('.voice-time');
         voiceAudio.addEventListener('timeupdate', () => {
@@ -3531,6 +3864,15 @@ RemminStore.ready.then(() => {
         e.preventDefault();
         if (e.target.closest('.voice-handle')) return true;
         if (e.target.closest('.voice-play')) { toggleVoicePlayback(chip); return true; }
+        if (e.target.closest('.voice-loop')) {
+            const on = chip.getAttribute('data-loop') !== '1';
+            if (on) chip.setAttribute('data-loop', '1'); else chip.removeAttribute('data-loop');
+            chip.querySelector('.voice-loop').classList.toggle('on', on);
+            if (voicePlayingChip === chip && voiceAudio) voiceAudio.loop = on;
+            markTextChanged();
+            toast(on ? 'Loop on: it plays again and again' : 'Loop off');
+            return true;
+        }
         if (e.target.closest('.voice-remove')) {
             const ok = await askConfirm('Remove voice note', `Remove "${chip.getAttribute('data-name')}" from this note?`, 'Delete');
             if (!ok) return true;
@@ -6570,10 +6912,15 @@ RemminStore.ready.then(() => {
         clearTimeout(gifTimer);
         const showing = state.prefs.mode === 'draw' && state.prefs.activeTab !== 'calendar' && !document.hidden;
         // videos only play while they are on the shown drawing
-        const playing = new Set(showing ? state.draw.strokes.filter((s) => s.video).map((s) => s.video) : []);
-        drawVideoCache.forEach((v, src) => { if (playing.has(src)) { if (v.paused) v.play().catch(() => {}); } else if (!v.paused) v.pause(); });
+        const onDrawing = showing ? state.draw.strokes.filter((s) => s.video) : [];
+        const playing = new Set(onDrawing.map((s) => s.video).filter((r) => !drawVideoPaused.has(r)));
+        drawVideoCache.forEach((v, src) => {
+            if (!playing.has(src)) { if (!v.paused) v.pause(); return; }
+            const sound = onDrawing.some((s) => s.video === src && !s.muted);
+            if (v.paused || (sound && v.muted && !drawNeedsUnmute) || (!sound && !v.muted)) playDrawVideo(v, sound);
+        });
         if (!showing) return;
-        if (!playing.size && !state.draw.strokes.some((s) => s.image && gifAnims.get(s.image))) return;
+        if (!onDrawing.length && !state.draw.strokes.some((s) => s.image && gifAnims.get(s.image))) return;
         gifTimer = setTimeout(() => { if (!state.draw.drawing) renderStrokes(); else animateDrawGifs(); }, playing.size ? 33 : 60);
     }
     document.addEventListener('visibilitychange', () => { if (!document.hidden) animateDrawGifs(); });
@@ -6656,20 +7003,42 @@ RemminStore.ready.then(() => {
     /* ---------------- videos in the drawing ----------------
      * A video item is a picture (its first frame, so moving / resizing / grids all work)
      * with the video itself in item.video; while the drawing is shown it plays muted, on repeat. */
-    const drawVideoCache = new Map();
-    function drawVideoEl(src) {
-        let v = drawVideoCache.get(src);
+    const drawVideoCache = new Map(); // "media:<id>" → <video>
+    const drawVideoPaused = new Set();  // videos paused with the menu
+    let drawNeedsUnmute = false;
+    function drawVideoEl(ref) {
+        let v = drawVideoCache.get(ref);
         if (!v) {
             v = document.createElement('video');
-            v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto';
-            v.addEventListener('loadeddata', () => { renderStrokes(); v.play().catch(() => {}); }, { once: true });
-            v.src = src;
-            drawVideoCache.set(src, v);
+            v.loop = true; v.playsInline = true; v.preload = 'auto';
+            v.addEventListener('loadeddata', () => { renderStrokes(); }, { once: true });
+            mediaUrl(ref).then((url) => { v.src = url; }).catch(() => {});
+            drawVideoCache.set(ref, v);
         }
         return v;
     }
+    function dropDrawVideo(ref) {
+        const v = drawVideoCache.get(ref);
+        if (v) { v.pause(); v.removeAttribute('src'); drawVideoCache.delete(ref); }
+        if (state.prefs.mode === 'draw') renderStrokes();
+    }
+    // with sound: the browser only allows that after a click on the page; until then it plays muted
+    function playDrawVideo(v, wantSound) {
+        v.muted = !wantSound;
+        v.play().catch(() => {
+            if (!wantSound) return;
+            v.muted = true;
+            drawNeedsUnmute = true;
+            v.play().catch(() => {});
+        });
+    }
+    document.addEventListener('pointerdown', () => {
+        if (!drawNeedsUnmute) return;
+        drawNeedsUnmute = false;
+        animateDrawGifs();
+    }, true);
     // the first frame of a video as a picture (and its size)
-    function videoPoster(src) {
+    function videoPoster(url) {
         return new Promise((resolve, reject) => {
             const v = document.createElement('video');
             v.muted = true; v.playsInline = true; v.preload = 'auto';
@@ -6683,24 +7052,29 @@ RemminStore.ready.then(() => {
                 c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
                 resolve({ image: c.toDataURL('image/jpeg', 0.8), width: v.videoWidth, height: v.videoHeight });
             }, { once: true });
-            v.src = src;
+            v.src = url;
         });
     }
     async function addDrawVideos(files, at) {
         const note = noteById(state.currentNoteId);
         if (!note || isPrivateLocked(note)) return;
-        const srcs = await readVideoFiles(files);
+        addDrawVideoRefs(await readVideoFiles(files), at);
+    }
+    async function addDrawVideoRefs(refs, at) {
+        const note = noteById(state.currentNoteId);
+        if (!note || isPrivateLocked(note)) return;
         let added = null;
-        for (const [i, src] of srcs.entries()) {
+        for (const [i, ref] of refs.entries()) {
+            if (!isMediaRef(ref)) { toast('YouTube / Vimeo videos cannot go in a drawing, only video files'); continue; }
             let poster;
-            try { poster = await videoPoster(src); } catch (err) { toast('This video cannot be played in the browser'); continue; }
+            try { poster = await videoPoster(await mediaUrl(ref)); } catch (err) { toast('This video cannot be played in the browser'); continue; }
             const W = canvas.clientWidth || canvas.width, H = canvas.clientHeight || canvas.height;
             let w = Math.min(0.6, poster.width / W);
             let h = w * W * (poster.height / poster.width) / H;
             if (h > 0.8) { w *= 0.8 / h; h = 0.8; }
             const cx = at ? at.x : 0.5, cy = at ? at.y : 0.5;
             const item = {
-                image: poster.image, video: src,
+                image: poster.image, video: ref,
                 x: Math.min(1 - w, Math.max(0, cx - w / 2)) + i * 0.03,
                 y: Math.min(1 - h, Math.max(0, cy - h / 2)) + i * 0.03,
                 w, h, points: []
@@ -6713,7 +7087,22 @@ RemminStore.ready.then(() => {
         drawSel = added;
         renderStrokes();
         flushEditor();
-        toast('Video added: it plays without sound, on repeat. Drag it to move, drag the corner to resize');
+        toast('Video added: it plays on repeat. Right-click it for sound, pause and more');
+    }
+    // right-click on a video in the drawing: its options
+    function drawVideoMenu(item, x, y) {
+        const v = drawVideoEl(item.video);
+        menuAt(x, y, 'Video', videoMenuActions(item.video, {
+            playing: { on: !drawVideoPaused.has(item.video), toggle: () => { if (drawVideoPaused.has(item.video)) drawVideoPaused.delete(item.video); else { drawVideoPaused.add(item.video); v.pause(); } animateDrawGifs(); } },
+            sound: { on: !item.muted, toggle: () => { pushDrawUndo(); item.muted = !item.muted; flushEditor(); animateDrawGifs(); } },
+            remove: () => {
+                pushDrawUndo();
+                state.draw.strokes = state.draw.strokes.filter((s) => s !== item);
+                if (drawSel === item) drawSel = null;
+                renderStrokes();
+                flushEditor();
+            }
+        }));
     }
 
     async function addDrawImages(files, at) {
@@ -6780,6 +7169,8 @@ RemminStore.ready.then(() => {
         if (document.querySelector('.modal.active')) return;
         const typing = e.target.closest && e.target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]');
         if (typing && typing.offsetParent !== null) return;
+        const copiedVid = pastedVideoRef(e);
+        if (copiedVid) { e.preventDefault(); addDrawVideoRefs([copiedVid]); return; }
         const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
         if (!files.length) {
             // pieces copied with the select tool (they also carry a picture: use the real lines instead)
@@ -6835,6 +7226,10 @@ RemminStore.ready.then(() => {
         e.preventDefault();
         const note = noteById(state.currentNoteId);
         if (!note) return;
+        if (e.pointerType === 'mouse' && e.button === 2) {
+            const pic = pictureAt(pointerPos(e, true));
+            if (pic && pic.video) { drawVideoMenu(pic, e.clientX, e.clientY); return; }
+        }
         if (isEraseButton(e)) {
             if (state.draw.drawing || drawSelDrag || pickDrag || marquee) return;
             rightErase = true;
@@ -8264,6 +8659,18 @@ RemminStore.ready.then(() => {
 
     cbBoard.addEventListener('pointerdown', (e) => {
         if (!cbActive()) return;
+        // right-click on a video: its options
+        const vidEl = e.button === 2 && e.target.closest && e.target.closest('.cb-video');
+        if (vidEl) {
+            const it = cbById(vidEl.dataset.id);
+            if (it) {
+                e.preventDefault();
+                cb.sel = new Set([it.id]);
+                cbRender();
+                menuAt(e.clientX, e.clientY, 'Video', videoMenuActions(it.src, { remove: () => { cb.sel = new Set([it.id]); cbDelete(); } }));
+                return;
+            }
+        }
         if (cb.editing && e.target.closest('.cb-editing') && e.button === 0) return; // place the text cursor
         cbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         try { cbBoard.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
@@ -8603,6 +9010,8 @@ RemminStore.ready.then(() => {
     document.addEventListener('paste', (e) => {
         if (!cbActive() || !e.clipboardData) return;
         if (Date.now() - cbMiddleAt < 1500) { e.preventDefault(); return; }
+        const copiedVid = !cb.editing && !cbTypingElsewhere(e) && pastedVideoRef(e);
+        if (copiedVid) { e.preventDefault(); cbAddVideo(copiedVid); return; }
         const files = [...(e.clipboardData.files || [])].filter((f) => f.type.startsWith('image/'));
         if (cb.editing) {
             // pictures pasted while typing become pictures on the board; text goes in the note
@@ -9967,6 +10376,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Videos: move + resize in Text, same right-click menu everywhere, copy / paste, compress, sound in Draw; 🔁 loop for audio',
         'Drag video files from your disk into Text, Collage and Draw',
         'Holiday stripes: new green colour, twice as wide',
         'Background lines turn gold while a private note is open',
@@ -10214,7 +10624,8 @@ RemminStore.ready.then(() => {
     }
 
     const snapshotKey = (snap) => stableStringify({ notes: snap.notes, folders: snap.folders, deleted: snap.deleted, privatePass: snap.privatePass || null, settings: snap.settings || null,
-        trash: (snap.trash || []).map((t) => [t.note.id, t.deletedAt]), trashGone: snap.trashGone || {} });
+        trash: (snap.trash || []).map((t) => [t.note.id, t.deletedAt]), trashGone: snap.trashGone || {},
+        media: Object.keys(snap.media || {}).sort().map((k) => `${k}:${snap.media[k].length}`) });
 
     function localSnapshot() {
         return JSON.parse(JSON.stringify({
@@ -10225,7 +10636,8 @@ RemminStore.ready.then(() => {
             settings: syncedSettings(),
             trash: state.trash,
             trashGone: state.trashGone,
-            updatedAt: state.updatedAt
+            updatedAt: state.updatedAt,
+            media: pickMedia(state.media, state.notes, state.trash)
         }));
     }
 
@@ -10242,7 +10654,8 @@ RemminStore.ready.then(() => {
                 .filter((t) => t && t.note && typeof t.note.id === 'string' && typeof t.deletedAt === 'string')
                 .map((t) => { migrateNote(t.note); return { note: t.note, deletedAt: t.deletedAt }; }),
             trashGone: Array.isArray(data) || !data.trashGone || typeof data.trashGone !== 'object' ? {} : data.trashGone,
-            updatedAt: Array.isArray(data) ? null : (data.updatedAt || null)
+            updatedAt: Array.isArray(data) ? null : (data.updatedAt || null),
+            media: Array.isArray(data) ? {} : validMedia(data.media)
         };
         return snap;
     }
@@ -10299,7 +10712,12 @@ RemminStore.ready.then(() => {
         const trashGoneAll = mergeGone(local.trashGone, remote.trashGone);
         const trash = mergeTrash(local.trash, remote.trash, trashGoneAll, new Set(notes.map((n) => n.id)));
 
-        return { notes, folders, deleted, privatePass: pass, settings, trash, trashGone: trashGoneAll, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
+        // video files: from both sides (a compressed, smaller version wins), only the ones still used
+        const allMedia = { ...(remote.media || {}) };
+        Object.entries(local.media || {}).forEach(([k, v]) => { if (!allMedia[k] || v.length < allMedia[k].length) allMedia[k] = v; });
+        const media = pickMedia(allMedia, notes, trash);
+
+        return { notes, folders, deleted, privatePass: pass, settings, trash, trashGone: trashGoneAll, updatedAt: laterIso(local.updatedAt, remote.updatedAt), media };
     }
 
     // Holiday choices + clocks from remmin.json / a .json file
@@ -10334,6 +10752,15 @@ RemminStore.ready.then(() => {
             const at = (snap.deleted && snap.deleted.notes && snap.deleted.notes[n.id]) || new Date().toISOString();
             state.trash.unshift({ note: JSON.parse(JSON.stringify(n)), deletedAt: at });
         });
+        // video files from the other side (or a compressed version)
+        let mediaChanged = false;
+        Object.entries(snap.media || {}).forEach(([k, v]) => {
+            if (state.media[k] && state.media[k].length === v.length) return;
+            state.media[k] = v;
+            mediaChanged = true;
+            if (typeof refreshMediaPlayers === 'function') refreshMediaPlayers(k);
+        });
+        if (mediaChanged) scheduleSaveMedia();
         state.notes = snap.notes.map((n) => { migrateNote(n); return n; });
         // the synced trash
         state.trashGone = mergeGone(state.trashGone, snap.trashGone);
@@ -10413,7 +10840,8 @@ RemminStore.ready.then(() => {
             ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
             ...(snap.settings ? { settings: snap.settings } : {}),
             trash: snap.trash || [],
-            trashGone: snap.trashGone || {}
+            trashGone: snap.trashGone || {},
+            media: snap.media || {}
         };
         const fileText = JSON.stringify(payload, null, 2);
         githubConfig.fileSize = new TextEncoder().encode(fileText).length;
@@ -10512,7 +10940,8 @@ RemminStore.ready.then(() => {
                     ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
                     ...(snap.settings ? { settings: snap.settings } : {}),
                     trash: snap.trash || [],
-                    trashGone: snap.trashGone || {}
+                    trashGone: snap.trashGone || {},
+                    media: snap.media || {}
                 };
                 const r = await serverRequest('PUT', payload, rev);
                 serverConfig.remoteUpdatedAt = payload.updatedAt;
@@ -10784,7 +11213,8 @@ RemminStore.ready.then(() => {
             ...(privatePass ? { privatePass } : {}),
             ...(syncedSettings() ? { settings: syncedSettings() } : {}),
             trash: state.trash,
-            trashGone: state.trashGone
+            trashGone: state.trashGone,
+            media: pickMedia(state.media, state.notes, state.trash)
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);

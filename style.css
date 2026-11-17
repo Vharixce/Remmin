@@ -2263,3 +2263,20 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .cb-video video { flex: 1; width: 100%; min-height: 0; object-fit: contain; background: #000; }
 .collage-board.panning .cb-video video, .collage-board[data-tool]:not([data-tool="select"]) .cb-video video,
 .cb-video:not(.selected) video, .ctrl-held .cb-video video { pointer-events: none; }
+
+/* video files: resize handle, menus at the mouse, compress progress */
+.point-anchor { position: fixed; width: 1px; height: 1px; pointer-events: none; }
+.video-embed[data-w] { max-width: none; }
+.video-embed { box-sizing: border-box; }
+.video-embed .ve-handle { position: absolute; right: -6px; bottom: -6px; width: 14px; height: 14px; border-radius: 4px; background: #7c6ff0; border: 2px solid #fff; cursor: nwse-resize; opacity: 0; transition: opacity .15s; touch-action: none; z-index: 2; }
+.video-embed:hover .ve-handle { opacity: 1; }
+.video-embed[draggable="true"] { cursor: grabbing; }
+.video-embed::before { cursor: grab; }
+video.missing { min-height: 120px; }
+.compress-box { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 3000; display: flex; flex-direction: column; gap: 8px; min-width: 300px; max-width: 90vw; padding: 12px 14px; border-radius: 10px; background: var(--card, #1c1d24); border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0, 0, 0, .5); font-size: 13px; }
+.compress-box[hidden] { display: none; }
+.compress-bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.compress-bar > div { height: 100%; width: 0; background: #7c6ff0; transition: width .3s; }
+.compress-cancel { align-self: flex-end; }
+.voice-chip .voice-loop { background: transparent; opacity: .45; width: 22px; height: 20px; font-size: 12px; }
+.voice-chip .voice-loop.on { opacity: 1; background: rgba(124, 111, 240, .35); }

@@ -373,7 +373,7 @@ RemminStore.ready.then(() => {
         const out = {};
         if (!m || typeof m !== 'object' || Array.isArray(m)) return out;
         Object.entries(m).forEach(([k, v]) => {
-            if (/^[a-z0-9]{4,40}$/.test(k) && typeof v === 'string' && /^data:video\/[\w.+-]+;base64,/i.test(v.slice(0, 80))) out[k] = v;
+            if (/^[a-z0-9]{4,40}$/.test(k) && typeof v === 'string' && /^data:(?:video|audio)\/[\w.+-]+(?:;[\w=.+-]+)*;base64,/i.test(v.slice(0, 120))) out[k] = v;
         });
         return out;
     }
@@ -388,8 +388,9 @@ RemminStore.ready.then(() => {
         });
     }
     function migrateMediaString(v) {
-        if (v.startsWith('data:video/')) return mediaIdFor(v);
-        if (v.length > 200 && v.includes('data-video="data:video/')) return v.replace(/data-video="(data:video\/[^"]+)"/g, (m, d) => `data-video="${mediaIdFor(d)}"`);
+        if (v.startsWith('data:video/') || v.startsWith('data:audio/')) return mediaIdFor(v);
+        if (v.length > 200 && v.includes('data-video="data:video/')) v = v.replace(/data-video="(data:video\/[^"]+)"/g, (m, d) => `data-video="${mediaIdFor(d)}"`);
+        if (v.length > 200 && v.includes('data-voice="data:audio/')) v = v.replace(/data-voice="(data:audio\/[^"]+)"/g, (m, d) => `data-voice="${mediaIdFor(d)}"`);
         return v;
     }
     // the media used by these notes and trash; only those are kept and synced
@@ -1953,9 +1954,29 @@ RemminStore.ready.then(() => {
     const VIDEO_MAX_MB = 25;
     const BIG_FILE_MB = 25; // videos, pictures and audio above this get the question to compress them first
     // a picture file above 25 MB: ask first (it is made smaller, then it fits)
-    async function allowBigPicture(file) {
-        if (typeof file === 'string' || !file || file.size <= BIG_FILE_MB * 1048576) return true;
-        return askConfirm('Picture too big', `${file.name} is ${(file.size / 1048576).toFixed(1)} MB (max ${BIG_FILE_MB} MB). Compress it so it fits in the note?${/gif$/i.test(file.type) ? ' (A GIF this big stops moving.)' : ''}`, 'Compress');
+    // a file above 25 MB: compress it to a size you choose (below 25 MB); null = not added
+    async function askBigTarget(file, kind, extra = '') {
+        const mb = file.size / 1048576;
+        const answer = await askDialog({
+            title: `${kind} too big`,
+            message: `${file.name} is ${mb.toFixed(1)} MB (max ${BIG_FILE_MB} MB). Compress it so it fits in the note: how many MB may it be? (less than ${BIG_FILE_MB})${extra}`,
+            input: '20',
+            okLabel: 'Compress'
+        });
+        if (answer === null || answer === false) return null;
+        const target = parseFloat(String(answer).replace(',', '.'));
+        if (!Number.isFinite(target) || target <= 0 || target >= BIG_FILE_MB) { toast(`Enter a number of MB below ${BIG_FILE_MB}, for example 20`); return null; }
+        return target * 1048576;
+    }
+    // a picture file → the picture text to store (big ones: to the size you choose); null = not added
+    async function pictureFileToStorable(file) {
+        if (typeof file === 'string') return file;
+        if (!file || file.size <= BIG_FILE_MB * 1048576) return imageFileToDataUrl(file);
+        const bytes = await askBigTarget(file, 'Picture', /gif$/i.test(file.type) ? ' A GIF this big stops moving.' : '');
+        if (!bytes) return null;
+        let src = await imageFileToDataUrl(file);
+        if (sizeOfData(src) > bytes) src = await compressPictureData(src, { targetBytes: bytes });
+        return src;
     }
     const isLocalVideo = (src) => isMediaRef(src);
     const isVideoSrc = (src) => VIDEO_SRC_RE.test(src || '') || isMediaRef(src);
@@ -1985,11 +2006,11 @@ RemminStore.ready.then(() => {
         for (const f of files) {
             try {
                 if (f.size > VIDEO_MAX_MB * 1048576) {
-                    const ok = await askConfirm('Video too big', `${f.name} is ${(f.size / 1048576).toFixed(1)} MB (max ${VIDEO_MAX_MB} MB per video). Compress it so it fits? This takes about as long as the video lasts; keep this tab open.`, 'Compress');
-                    if (!ok) continue;
+                    const bytes = await askBigTarget(f, 'Video', ' This takes about as long as the video lasts; keep this tab open.');
+                    if (!bytes) continue;
                     const url = URL.createObjectURL(f);
                     try {
-                        const data = await compressVideoUrl(url, { ...COMPRESS_PRESETS[1], maxBytes: VIDEO_MAX_MB * 1048576 * 0.95, label: f.name });
+                        const data = await compressVideoToBytes(url, bytes, f.name);
                         if (data.length * 0.75 > VIDEO_MAX_MB * 1048576) { toast(`${f.name} is still too big after compressing`); continue; }
                         out.push(mediaIdFor(data));
                     } finally { URL.revokeObjectURL(url); }
@@ -2145,6 +2166,19 @@ RemminStore.ready.then(() => {
         renderEditor();
         toast(`Compression undone: back to ${mbOf(orig.data).toFixed(1)} MB`);
     }
+    // a video (address) compressed to at most `bytes`: a second, smaller try when the first one is too big
+    async function compressVideoToBytes(url, bytes, label) {
+        let out = await compressVideoUrl(url, { maxH: 'auto', bitrate: 8000000, maxBytes: bytes, audioBps: 64000, label: `${label} to ${(bytes / 1048576).toFixed(1)} MB` });
+        const got = out.length * 0.75;
+        if (got > bytes * 1.03) {
+            const dur = await new Promise((res) => { const v = document.createElement('video'); v.preload = 'metadata'; v.onloadedmetadata = () => res(v.duration); v.onerror = () => res(0); v.src = url; });
+            if (Number.isFinite(dur) && dur > 0) {
+                const rate = Math.max(40000, ((bytes * 8 * 0.85) / dur - 32000) * Math.min(1, bytes / got));
+                out = await compressVideoUrl(url, { maxH: 'auto', bitrate: rate, audioBps: 32000, label: `${label} (2nd try)` });
+            }
+        }
+        return out;
+    }
     // compress to (at most) a number of MB; a second, smaller try when the first one ends up too big
     async function compressMediaTo(ref) {
         const id = ref.slice(6);
@@ -2190,8 +2224,116 @@ RemminStore.ready.then(() => {
         const got = mbOf(out);
         toast(`Video compressed: ${now.toFixed(1)} MB → ${got.toFixed(2)} MB${got > target * 1.03 ? ` (a little above ${target} MB: this was the smallest possible)` : ''}`);
     }
-    // audio: played once (silently) into a smaller recording that fits targetBytes
+    // Ogg pages around Opus packets (so the result is a normal .ogg audio file)
+    const OGG_CRC = (() => {
+        const t = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) { let r = i << 24; for (let j = 0; j < 8; j++) r = (r & 0x80000000) ? ((r << 1) ^ 0x04c11db7) : (r << 1); t[i] = r >>> 0; }
+        return t;
+    })();
+    function oggOpusFile(packets, channels, inputRate, preSkip) {
+        const serial = (Math.random() * 0xffffffff) >>> 0;
+        const pages = [];
+        let seq = 0;
+        const page = (segs, granule, flags) => {
+            const lacing = [];
+            segs.forEach((p) => { let n = p.length; while (n >= 255) { lacing.push(255); n -= 255; } lacing.push(n); });
+            const size = segs.reduce((t, p) => t + p.length, 0);
+            const buf = new Uint8Array(27 + lacing.length + size);
+            const dv = new DataView(buf.buffer);
+            buf.set([0x4f, 0x67, 0x67, 0x53], 0); // OggS
+            buf[5] = flags;
+            dv.setUint32(6, granule % 4294967296, true); dv.setUint32(10, Math.floor(granule / 4294967296), true);
+            dv.setUint32(14, serial, true); dv.setUint32(18, seq++, true);
+            buf[26] = lacing.length;
+            buf.set(lacing, 27);
+            let o = 27 + lacing.length;
+            segs.forEach((p) => { buf.set(p, o); o += p.length; });
+            let crc = 0;
+            for (let i = 0; i < buf.length; i++) crc = ((crc << 8) ^ OGG_CRC[((crc >>> 24) ^ buf[i]) & 0xff]) >>> 0;
+            dv.setUint32(22, crc, true);
+            pages.push(buf);
+        };
+        const head = new Uint8Array(19);
+        head.set(new TextEncoder().encode('OpusHead'), 0);
+        head[8] = 1; head[9] = channels;
+        new DataView(head.buffer).setUint16(10, preSkip, true);
+        new DataView(head.buffer).setUint32(12, inputRate, true);
+        page([head], 0, 2);
+        const vendor = new TextEncoder().encode('Remmin');
+        const tags = new Uint8Array(8 + 4 + vendor.length + 4);
+        tags.set(new TextEncoder().encode('OpusTags'), 0);
+        new DataView(tags.buffer).setUint32(8, vendor.length, true);
+        tags.set(vendor, 12);
+        page([tags], 0, 0);
+        let granule = preSkip, segs = [], lace = 0;
+        packets.forEach((pk, i) => {
+            const need = Math.floor(pk.data.length / 255) + 1;
+            if (segs.length && lace + need > 255) { page(segs, granule, 0); segs = []; lace = 0; }
+            segs.push(pk.data); lace += need; granule += pk.samples;
+            if (i === packets.length - 1) page(segs, granule, 4);
+        });
+        if (!packets.length) page([], granule, 4);
+        return new Blob(pages, { type: 'audio/ogg' });
+    }
+    // fast: decode the whole file, encode it to Opus with WebCodecs (much faster than playing it)
+    async function compressAudioFast(url, targetBytes, label) {
+        if (!window.AudioEncoder || !window.AudioData || !window.OfflineAudioContext) return null;
+        if (!new Audio().canPlayType('audio/ogg; codecs=opus')) return null;
+        const ui = compressProgress(`Compressing ${label}…`, () => {});
+        try {
+            const raw = await (await fetch(url)).arrayBuffer();
+            const ac = new OfflineAudioContext(1, 1, 48000);
+            const decoded = await ac.decodeAudioData(raw);
+            const dur = decoded.duration || 1;
+            let bps = Math.round(Math.max(12000, Math.min(128000, (targetBytes * 8 * 0.9) / dur)));
+            const channels = bps < 48000 ? 1 : Math.min(2, decoded.numberOfChannels);
+            const cfg = { codec: 'opus', sampleRate: 48000, numberOfChannels: channels, bitrate: bps };
+            const sup = await AudioEncoder.isConfigSupported(cfg).catch(() => null);
+            if (!sup || !sup.supported) return null;
+            ui.set(0.15, `Compressing ${label}… (reading)`);
+            // to 48 kHz (what Opus uses)
+            const off = new OfflineAudioContext(channels, Math.ceil(dur * 48000), 48000);
+            const srcNode = off.createBufferSource();
+            srcNode.buffer = decoded;
+            srcNode.connect(off.destination);
+            srcNode.start();
+            const pcm = await off.startRendering();
+            const packets = [];
+            let failed = null;
+            const enc = new AudioEncoder({
+                output: (chunk) => {
+                    const data = new Uint8Array(chunk.byteLength);
+                    chunk.copyTo(data);
+                    packets.push({ data, samples: Math.round((chunk.duration || 20000) * 48 / 1000) });
+                },
+                error: (e) => { failed = e; }
+            });
+            enc.configure(cfg);
+            const total = pcm.length, step = 48000;
+            for (let at = 0; at < total; at += step) {
+                const n = Math.min(step, total - at);
+                const planes = new Float32Array(n * channels);
+                for (let c = 0; c < channels; c++) planes.set(pcm.getChannelData(c).subarray(at, at + n), c * n);
+                enc.encode(new AudioData({ format: 'f32-planar', sampleRate: 48000, numberOfFrames: n, numberOfChannels: channels, timestamp: Math.round(at / 48 * 1000), data: planes }));
+                if (enc.encodeQueueSize > 20) await new Promise((r) => setTimeout(r, 0));
+                if ((at / step) % 20 === 0) { ui.set(0.15 + 0.8 * at / total, `Compressing ${label}… ${Math.round(at / total * 100)}%`); await new Promise((r) => setTimeout(r, 0)); }
+            }
+            await enc.flush();
+            enc.close();
+            if (failed || !packets.length) return null;
+            const out = await blobToDataUrl(oggOpusFile(packets, channels, decoded.sampleRate, 312));
+            return /^data:audio\//.test(out) ? out : null;
+        } catch (_) {
+            return null;
+        } finally { ui.close(); }
+    }
+    // audio: fast with WebCodecs when the browser can; otherwise played once (silently) into a smaller recording
     async function compressAudioUrl(url, { targetBytes, label = 'audio' }) {
+        const fast = await compressAudioFast(url, targetBytes, label);
+        if (fast) return fast.replace(/^data:audio\/ogg;/, 'data:audio/ogg;');
+        return compressAudioSlow(url, { targetBytes, label });
+    }
+    async function compressAudioSlow(url, { targetBytes, label = 'audio' }) {
         const mime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4']
             .find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
         if (!mime) throw new Error('unsupported');
@@ -2465,7 +2607,7 @@ RemminStore.ready.then(() => {
                 if (!RICH_TAGS.has(child.tagName)) { child.replaceWith(...child.childNodes); return; }
                 if (child.tagName === 'SPAN' && child.hasAttribute('data-voice')) {
                     const src = child.getAttribute('data-voice') || '';
-                    if (!VOICE_SRC_RE.test(src)) { child.remove(); return; }
+                    if (!isVoiceSrc(src)) { child.remove(); return; }
                     const name = (child.getAttribute('data-name') || 'Voice note').slice(0, 200);
                     const dur = String(Math.max(0, Math.round(Number(child.getAttribute('data-duration')) || 0)));
                     const loop = child.getAttribute('data-loop') === '1';
@@ -3068,8 +3210,9 @@ RemminStore.ready.then(() => {
         try {
             for (const file of images) {
                 try {
-                    if (!(await allowBigPicture(file))) continue;
-                    const line = pictureLine(typeof file === 'string' ? file : await imageFileToDataUrl(file));
+                    const picSrc = await pictureFileToStorable(file);
+                    if (!picSrc) continue;
+                    const line = pictureLine(picSrc);
                     if (at.inline) {
                         const img = line.querySelector('img');
                         placeInline(img, at); // next to the other picture(s)
@@ -4015,6 +4158,11 @@ RemminStore.ready.then(() => {
      */
 
     const VOICE_SRC_RE = /^data:audio\/[\w.+-]+(;[\w=.+-]+)*;base64,[A-Za-z0-9+/=]+$/i;
+    // audio is kept once in the media store ("media:<id>"); older notes may still hold the data itself
+    const isVoiceSrc = (s) => isMediaRef(s) || VOICE_SRC_RE.test(s || '');
+    const resolveAudio = (s) => (isMediaRef(s) ? mediaData(s) : s);
+    // the stored form of an audio: its media reference (the same file twice = stored once)
+    const audioRef = (s) => (typeof s === 'string' && s.startsWith('data:audio/') ? mediaIdFor(s) : s);
     const VOICE_MAX_SECONDS = 10 * 60;
     const VOICE_MAX_CHARS = 25 * 1048576 * 4 / 3 + 200; // 25 MB of audio (stored as text)
 
@@ -4082,7 +4230,7 @@ RemminStore.ready.then(() => {
         }
         stopVoicePlayback();
         voicePlayingChip = chip;
-        voiceAudio = new Audio(chip.getAttribute('data-voice'));
+        voiceAudio = new Audio(resolveAudio(chip.getAttribute('data-voice')));
         voiceAudio.loop = chip.getAttribute('data-loop') === '1';
         voiceAudio.volume = chipVolume(chip) / 100;
         const total = Number(chip.getAttribute('data-duration')) || 0;
@@ -4289,6 +4437,7 @@ RemminStore.ready.then(() => {
             return;
         }
         ensureCaretInEditor();
+        src = audioRef(src);
         const html = voiceChipHtml(src, name, duration, loop, vol) + '&nbsp;';
         if (!document.execCommand('insertHTML', false, html)) {
             const tmp = document.createElement('span');
@@ -4326,11 +4475,11 @@ RemminStore.ready.then(() => {
             const src = await blobToDataUrl(file);
             if (src.length <= VOICE_MAX_CHARS) return src;
         }
-        const ok = await askConfirm('Audio too big', `${file.name} is ${(file.size / 1048576).toFixed(1)} MB (max ${BIG_FILE_MB} MB). Compress it so it fits in the note? This takes about as long as the audio lasts; keep this tab open.`, 'Compress');
-        if (!ok) return null;
+        const bytes = await askBigTarget(file, 'Audio');
+        if (!bytes) return null;
         const url = URL.createObjectURL(file);
         try {
-            const out = await compressAudioUrl(url, { targetBytes: (BIG_FILE_MB - 1) * 1048576, label: file.name });
+            const out = await compressAudioUrl(url, { targetBytes: bytes, label: file.name });
             if (out.length > VOICE_MAX_CHARS) { toast(`${file.name} is still too big after compressing (too long)`); return null; }
             return out;
         } catch (err) {
@@ -4343,7 +4492,7 @@ RemminStore.ready.then(() => {
             try {
                 const src = await audioFileToStorable(file);
                 if (!src) continue;
-                if (!VOICE_SRC_RE.test(src)) throw new Error('unsupported');
+                if (!isVoiceSrc(src)) throw new Error('unsupported');
                 insertVoiceChip(src, file.name.replace(/\.[^.]+$/, ''), await audioDuration(src));
             } catch (_) {
                 toast(`Could not add audio: ${file.name}`);
@@ -4366,10 +4515,12 @@ RemminStore.ready.then(() => {
         try {
             const a = JSON.parse(m[1]);
             const vol = Math.round(Number(a.vol));
-            return a && typeof a.src === 'string' && VOICE_SRC_RE.test(a.src) ? { src: a.src, name: String(a.name || 'Voice note').slice(0, 200), duration: Number(a.duration) || 0, loop: !!a.loop, vol: Number.isFinite(vol) && vol >= 0 && vol < 100 ? vol : 100 } : null;
+            return a && typeof a.src === 'string' && isVoiceSrc(a.src) ? { src: a.src, name: String(a.name || 'Voice note').slice(0, 200), duration: Number(a.duration) || 0, loop: !!a.loop, vol: Number.isFinite(vol) && vol >= 0 && vol < 100 ? vol : 100 } : null;
         } catch (_) { return null; }
     }
     function downloadAudio(src, name) {
+        src = resolveAudio(src);
+        if (!src) { toast('This audio is not on this device yet'); return; }
         const ext = (/^data:audio\/([\w]+)/.exec(src) || [])[1] || 'webm';
         const a = document.createElement('a');
         a.href = src;
@@ -7687,8 +7838,8 @@ RemminStore.ready.then(() => {
         let added = null;
         for (const [i, file] of files.entries()) {
             let src;
-            if (!(await allowBigPicture(file))) continue;
-            try { src = typeof file === 'string' ? file : await imageFileToDataUrl(file); } catch (err) { toast('Could not read that picture'); continue; }
+            try { src = await pictureFileToStorable(file); } catch (err) { toast('Could not read that picture'); continue; }
+            if (!src) continue;
             const img = drawImageEl(src);
             if (!img.complete || !img.naturalWidth) {
                 await new Promise((resolve) => { img.addEventListener('load', resolve, { once: true }); img.addEventListener('error', resolve, { once: true }); });
@@ -8914,8 +9065,9 @@ RemminStore.ready.then(() => {
     }
     function cbAddAudio(a, at) {
         const note = noteById(cb.noteId);
-        if (!note || isPrivateLocked(note) || !a || !VOICE_SRC_RE.test(a.src || '')) return;
+        if (!note || isPrivateLocked(note) || !a || !isVoiceSrc(a.src || '')) return;
         if (a.src.length > VOICE_MAX_CHARS) { toast('This recording is too large to store. Keep voice notes under a few minutes.'); return; }
+        a = { ...a, src: audioRef(a.src) };
         const p = at || cbViewCenter();
         cbRecord();
         cbAdd({ type: 'audio', x: p.x - 160, y: p.y - 20, w: 320, h: 40, src: a.src, name: a.name || 'Voice note', duration: Math.round(a.duration || 0), loop: !!a.loop, ...(a.vol < 100 ? { volume: a.vol } : {}) });
@@ -8927,7 +9079,7 @@ RemminStore.ready.then(() => {
             try {
                 const src = await audioFileToStorable(file);
                 if (!src) continue;
-                if (!VOICE_SRC_RE.test(src)) throw new Error('unsupported');
+                if (!isVoiceSrc(src)) throw new Error('unsupported');
                 const p = at || cbViewCenter();
                 cbAddAudio({ src, name: file.name.replace(/\.[^.]+$/, ''), duration: await audioDuration(src) }, { x: p.x + i * 20, y: p.y + i * 50 });
             } catch (_) { toast(`Could not add audio: ${file.name}`); }
@@ -8974,8 +9126,8 @@ RemminStore.ready.then(() => {
         const added = [];
         for (const file of images) {
             try {
-                if (!(await allowBigPicture(file))) continue;
-                const src = typeof file === 'string' ? file : await imageFileToDataUrl(file);
+                const src = await pictureFileToStorable(file);
+                if (!src) continue;
                 const img = new Image();
                 img.src = src;
                 await (img.decode ? img.decode().catch(() => {}) : new Promise((r) => { img.onload = img.onerror = r; }));
@@ -11086,6 +11238,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Audio stored once (like videos), much faster audio compression, choose the MB size for too-big files',
         'Volume slider on audio; copy / paste pictures between Text, Collage and Draw; files over 25 MB can be compressed first',
         'Compress pictures (right-click) in Text, Collage and Draw; Pictures in the storage overview',
         'Click the storage bars: see which notes use the most space (after your Private Note Pass)',
@@ -12623,9 +12776,10 @@ RemminStore.ready.then(() => {
         const text = JSON.stringify(note);
         let m;
         while ((m = re.exec(text))) ids.add(m[1]);
-        let videos = 0;
-        ids.forEach((id) => { videos += (state.media[id] || '').length; });
-        return { parts, videos, ids, total: all + videos };
+        let videos = 0, audio = 0;
+        ids.forEach((id) => { const d = state.media[id] || ''; if (d.startsWith('data:audio/')) audio += d.length; else videos += d.length; });
+        parts.Audio = audio;
+        return { parts, videos: videos + audio, ids, total: all + videos + audio };
     }
     function renderStorageOverview() {
         const rows = state.notes.map((n) => ({ note: n, ...noteSizes(n) })).sort((a, b) => b.total - a.total);
@@ -12633,18 +12787,20 @@ RemminStore.ready.then(() => {
         const users = new Map();
         rows.forEach((r) => r.ids.forEach((id) => users.set(id, (users.get(id) || 0) + 1)));
         const picturesTotal = rows.reduce((t, r) => t + r.parts.Pictures, 0);
-        const notesTotal = rows.reduce((t, r) => t + r.total - r.videos - r.parts.Pictures, 0);
-        const videosTotal = Object.values(state.media).reduce((t, v) => t + v.length, 0);
+        const notesTotal = rows.reduce((t, r) => t + r.total - r.videos - r.parts.Pictures - r.parts.Audio, 0);
+        const videosTotal = Object.values(state.media).reduce((t, v) => t + (v.startsWith('data:audio/') ? 0 : v.length), 0);
+        const audioTotal = Object.values(state.media).reduce((t, v) => t + (v.startsWith('data:audio/') ? v.length : 0), 0);
         const trashTotal = JSON.stringify(state.trash || []).length;
         const max = rows.length ? rows[0].total : 1;
         $('storageSummary').innerHTML = `
             <div class="so-row-sum"><span>Notes (without pictures / videos)</span><b>${fmtSize(notesTotal)}</b></div>
             <div class="so-row-sum"><span>Pictures</span><b>${fmtSize(picturesTotal)}</b></div>
             <div class="so-row-sum"><span>Videos (each stored once)</span><b>${fmtSize(videosTotal)}</b></div>
+            <div class="so-row-sum"><span>Audio (each stored once)</span><b>${fmtSize(audioTotal)}</b></div>
             <div class="so-row-sum"><span>Trash</span><b>${fmtSize(trashTotal)}</b></div>`;
         $('storageList').innerHTML = rows.length ? rows.map((r, i) => {
             const shared = [...r.ids].filter((id) => (users.get(id) || 0) > 1).length;
-            const bits = [...Object.entries(r.parts), ['Videos', r.videos]].filter(([, v]) => v >= 1024)
+            const bits = [...Object.entries(r.parts), ['Videos', r.videos - r.parts.Audio]].filter(([, v]) => v >= 1024)
                 .map(([k, v]) => `${k} ${fmtSize(v)}`).join(' · ');
             return `<button type="button" class="so-item" data-id="${escapeHtml(r.note.id)}">
                 <span class="so-rank">${i + 1}</span>

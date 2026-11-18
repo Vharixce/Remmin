@@ -2134,6 +2134,14 @@ RemminStore.ready.then(() => {
         if (!state.mediaOrig[id]) state.mediaOrig[id] = { data, at: Date.now() };
         writeJSON(STORAGE.mediaOrig, state.mediaOrig);
     }
+    // "Keep this size": the original is forgotten, the compressed version stays for good
+    function keepCompressed(ref) {
+        const id = ref.slice(6);
+        if (!state.mediaOrig[id]) return;
+        delete state.mediaOrig[id];
+        writeJSON(STORAGE.mediaOrig, state.mediaOrig);
+        toast(`Kept at ${mbOf(state.media[id] || '').toFixed(2)} MB (the original is removed)`);
+    }
     // undo: the original comes back under a new id, and every note that uses the video points to it
     // (so the sync, where the smaller version would win, keeps the original)
     function undoCompression(ref) {
@@ -2276,7 +2284,7 @@ RemminStore.ready.then(() => {
         return new Blob(pages, { type: 'audio/ogg' });
     }
     // fast: decode the whole file, encode it to Opus with WebCodecs (much faster than playing it)
-    async function compressAudioFast(url, targetBytes, label) {
+    async function compressAudioFast(url, targetBytes, label, fixedBps = 0) {
         if (!window.AudioEncoder || !window.AudioData || !window.OfflineAudioContext) return null;
         if (!new Audio().canPlayType('audio/ogg; codecs=opus')) return null;
         const ui = compressProgress(`Compressing ${label}…`, () => {});
@@ -2285,7 +2293,7 @@ RemminStore.ready.then(() => {
             const ac = new OfflineAudioContext(1, 1, 48000);
             const decoded = await ac.decodeAudioData(raw);
             const dur = decoded.duration || 1;
-            let bps = Math.round(Math.max(12000, Math.min(128000, (targetBytes * 8 * 0.9) / dur)));
+            let bps = fixedBps || Math.round(Math.max(12000, Math.min(128000, (targetBytes * 8 * 0.9) / dur)));
             const channels = bps < 48000 ? 1 : Math.min(2, decoded.numberOfChannels);
             const cfg = { codec: 'opus', sampleRate: 48000, numberOfChannels: channels, bitrate: bps };
             const sup = await AudioEncoder.isConfigSupported(cfg).catch(() => null);
@@ -2328,12 +2336,12 @@ RemminStore.ready.then(() => {
         } finally { ui.close(); }
     }
     // audio: fast with WebCodecs when the browser can; otherwise played once (silently) into a smaller recording
-    async function compressAudioUrl(url, { targetBytes, label = 'audio' }) {
-        const fast = await compressAudioFast(url, targetBytes, label);
+    async function compressAudioUrl(url, { targetBytes, label = 'audio', bps = 0 }) {
+        const fast = await compressAudioFast(url, targetBytes, label, bps);
         if (fast) return fast.replace(/^data:audio\/ogg;/, 'data:audio/ogg;');
-        return compressAudioSlow(url, { targetBytes, label });
+        return compressAudioSlow(url, { targetBytes, label, fixedBps: bps });
     }
-    async function compressAudioSlow(url, { targetBytes, label = 'audio' }) {
+    async function compressAudioSlow(url, { targetBytes, label = 'audio', fixedBps = 0 }) {
         const mime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4']
             .find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
         if (!mime) throw new Error('unsupported');
@@ -2342,7 +2350,7 @@ RemminStore.ready.then(() => {
         a.src = url;
         await new Promise((resolve, reject) => { a.onloadedmetadata = resolve; a.onerror = () => reject(new Error('cannot play')); });
         const dur = Number.isFinite(a.duration) ? a.duration : 0;
-        const bps = Math.round(Math.max(12000, Math.min(128000, dur ? (targetBytes * 8 * 0.9) / dur : 64000)));
+        const bps = fixedBps || Math.round(Math.max(12000, Math.min(128000, dur ? (targetBytes * 8 * 0.9) / dur : 64000)));
         const ac = new (window.AudioContext || window.webkitAudioContext)();
         const node = ac.createMediaElementSource(a);
         const dest = ac.createMediaStreamDestination();
@@ -2509,6 +2517,11 @@ RemminStore.ready.then(() => {
                     place(orig.data);
                     toast('Compression undone');
                 } });
+                items.push({ label: 'Keep this size (forget the original)', icon: '✔', run: () => {
+                    delete imgOrigs()[mediaHash(src)];
+                    writeJSON(IMG_ORIG_KEY, imgOrigs());
+                    toast(`Kept at ${fmtSize(sizeOfData(src))} (the original is removed)`);
+                } });
             }
         } else if (/^data:image\/gif/i.test(src || '')) items.push({ label: 'GIFs cannot be compressed (they would stop moving)', icon: 'ℹ', run: () => {} });
         items.push({ label: 'Download picture', icon: '⬇', run: () => {
@@ -2566,7 +2579,10 @@ RemminStore.ready.then(() => {
                         ...COMPRESS_PRESETS.map((pr) => ({ label: pr.label, icon: '🗜', run: () => compressMedia(src, pr) }))]), 0)
             });
             const orig = state.mediaOrig && state.mediaOrig[src.slice(6)];
-            if (orig) items.push({ label: `Undo compression (back to ${mbOf(orig.data).toFixed(1)} MB)`, icon: '↺', run: () => undoCompression(src) });
+            if (orig) {
+                items.push({ label: `Undo compression (back to ${mbOf(orig.data).toFixed(1)} MB)`, icon: '↺', run: () => undoCompression(src) });
+                items.push({ label: 'Keep this size (forget the original)', icon: '✔', run: () => keepCompressed(src) });
+            }
         } else items.push({ label: 'Open on the website', icon: '↗', run: () => window.open(videoWatchUrl(src), '_blank', 'noopener') });
         if (sizes) [[25, '1/4'], [50, '1/2'], [75, '3/4'], [100, 'Full width']].forEach(([w, name]) =>
             items.push({ label: `Size ${name}${sizeNow === w ? ' ✓' : ''}`, icon: '↔', run: () => sizes(w) }));
@@ -4575,9 +4591,59 @@ RemminStore.ready.then(() => {
             { label: o.loop ? 'Loop off' : 'Loop on (play again and again)', icon: '🔁', run: o.setLoop },
             { label: 'Copy audio', icon: '⧉', run: () => copyAudio(a) },
             { label: 'Download audio', icon: '⬇', run: () => downloadAudio(a.src, a.name) },
+            ...audioCompressActions(a.src, o.x, o.y),
             { label: 'Rename', icon: '✎', run: o.rename },
             { label: 'Remove audio', icon: '🗑', danger: true, run: o.remove }
         ];
+    }
+    /* ---- compressing audio that is already in a note (all its places get the smaller version) ---- */
+    const AUDIO_PRESETS = [
+        { label: 'Good quality (96 kbps)', bps: 96000 },
+        { label: 'Smaller (48 kbps)', bps: 48000 },
+        { label: 'Smallest (24 kbps)', bps: 24000 }
+    ];
+    function audioCompressActions(src, x, y) {
+        if (!isMediaRef(src)) return [];
+        const data = mediaData(src);
+        const now = data ? ` (now ${mbOf(data).toFixed(2)} MB)` : '';
+        const items = [{
+            label: `Compress audio…${now}`, icon: '🗜',
+            run: () => setTimeout(() => menuAt(x || parseFloat(pointAnchor.style.left) || 200, y || parseFloat(pointAnchor.style.top) || 200, 'Compress to', [
+                { label: `Compress to … MB${now}`, icon: '✎', run: async () => {
+                    const cur = mbOf(mediaData(src));
+                    const answer = await askDialog({ title: 'Compress to … MB', message: `How many MB may the audio be? Now it is ${cur.toFixed(2)} MB; enter a smaller number.`, input: (cur / 2).toFixed(2), okLabel: 'Compress' });
+                    if (answer === null || answer === false) return;
+                    const mb = parseFloat(String(answer).replace(',', '.'));
+                    if (!Number.isFinite(mb) || mb <= 0) { toast('Enter a number of MB, for example 0.5'); return; }
+                    if (mb >= cur) { toast(`Enter a number below ${cur.toFixed(2)} MB`); return; }
+                    compressAudioMedia(src, { targetBytes: mb * 1048576 });
+                } },
+                ...AUDIO_PRESETS.map((pr) => ({ label: pr.label, icon: '🗜', run: () => compressAudioMedia(src, { bps: pr.bps }) }))
+            ]), 0)
+        }];
+        const orig = state.mediaOrig && state.mediaOrig[src.slice(6)];
+        if (orig) {
+            items.push({ label: `Undo compression (back to ${mbOf(orig.data).toFixed(2)} MB)`, icon: '↺', run: () => { stopVoicePlayback(); undoCompression(src); } });
+            items.push({ label: 'Keep this size (forget the original)', icon: '✔', run: () => keepCompressed(src) });
+        }
+        return items;
+    }
+    async function compressAudioMedia(ref, { targetBytes = 0, bps = 0 }) {
+        const id = ref.slice(6);
+        const before = state.media[id];
+        if (!before) return;
+        let out;
+        try { out = await compressAudioUrl(await mediaUrl(ref), { targetBytes: targetBytes || 1048576, bps, label: 'audio' }); }
+        catch (err) { toast(err && err.message === 'cancelled' ? 'Compressing stopped' : err && err.message === 'unsupported' ? 'This browser cannot compress audio' : 'Could not compress this audio'); return; }
+        if (!out || out.length >= before.length * 0.97) { toast(`Not smaller after compressing (${mbOf(before).toFixed(2)} MB): kept the original`); return; }
+        if (voicePlayingChip && voicePlayingChip.getAttribute('data-voice') === ref) stopVoicePlayback();
+        keepOriginal(id, before);
+        state.media[id] = out;
+        scheduleSaveMedia();
+        refreshMediaPlayers(id);
+        markChanged();
+        scheduleGithubSave();
+        toast(`Audio compressed: ${mbOf(before).toFixed(2)} MB → ${mbOf(out).toFixed(2)} MB`);
     }
     function textChipSetLoop(chip, on) {
         if (on) chip.setAttribute('data-loop', '1'); else chip.removeAttribute('data-loop');
@@ -4591,6 +4657,7 @@ RemminStore.ready.then(() => {
         if (!chip || !editorEl.contains(chip)) return;
         e.preventDefault();
         menuAt(e.clientX, e.clientY, 'Audio', audioMenuActions(chip, {
+            x: e.clientX, y: e.clientY,
             loop: chip.getAttribute('data-loop') === '1',
             setLoop: () => textChipSetLoop(chip, chip.getAttribute('data-loop') !== '1'),
             rename: async () => {
@@ -9140,8 +9207,9 @@ RemminStore.ready.then(() => {
     cbBoard.addEventListener('change', (e) => {
         if (e.target.classList && e.target.classList.contains('voice-vol')) cbSave();
     });
-    function cbAudioActions(it, chip) {
+    function cbAudioActions(it, chip, x, y) {
         return audioMenuActions(chip, {
+            x, y,
             loop: !!it.loop,
             setLoop: () => { cbRecord(); it.loop = !it.loop; if (voicePlayingChip === chip && voiceAudio) voiceAudio.loop = it.loop; cbRender(); cbSave(); },
             rename: async () => {
@@ -9551,7 +9619,7 @@ RemminStore.ready.then(() => {
                 e.preventDefault();
                 cb.sel = new Set([it.id]);
                 cbRender();
-                menuAt(e.clientX, e.clientY, 'Audio', cbAudioActions(it, audEl.querySelector('.cb-chip')));
+                menuAt(e.clientX, e.clientY, 'Audio', cbAudioActions(it, audEl.querySelector('.cb-chip'), e.clientX, e.clientY));
                 return;
             }
         }
@@ -11286,6 +11354,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Compress audio (right-click) + undo; "Keep this size" for videos, audio and pictures',
         'Audio: timeline to click / drag, and 15 s back / forward buttons',
         'Audio stored once (like videos), much faster audio compression, choose the MB size for too-big files',
         'Volume slider on audio; copy / paste pictures between Text, Collage and Draw; files over 25 MB can be compressed first',

@@ -15,6 +15,7 @@
     --danger: #f87171;
     --hover: #2a2a36;
     --sidebar-width: 260px;
+    --hubs-width: 72px;
 }
 
 html, body {
@@ -46,41 +47,45 @@ button:disabled {
 
 .app {
     display: grid;
-    grid-template-columns: var(--sidebar-width) 8px 1fr;
+    grid-template-columns: var(--sidebar-width) 8px 1fr var(--hubs-width);
     height: 100vh;
     height: 100dvh;
     position: relative;
 }
 
 .app.sidebar-right {
-    grid-template-columns: 1fr 8px var(--sidebar-width);
+    grid-template-columns: var(--hubs-width) 1fr 8px var(--sidebar-width);
 }
 
+/* the Hubs bar is always on the other side than the Explorer */
 .app .sidebar { grid-column: 1; grid-row: 1; }
 .app .sidebar-splitter { grid-column: 2; grid-row: 1; }
 .app .main { grid-column: 3; grid-row: 1; }
+.app .hubs-bar { grid-column: 4; grid-row: 1; }
 
 .app.sidebar-right .sidebar {
-    grid-column: 3;
+    grid-column: 4;
     grid-row: 1;
 }
 
 .app.sidebar-right .sidebar-splitter {
-    grid-column: 2;
+    grid-column: 3;
     grid-row: 1;
 }
 
 .app.sidebar-right .main {
-    grid-column: 1;
+    grid-column: 2;
     grid-row: 1;
 }
 
+.app.sidebar-right .hubs-bar { grid-column: 1; }
+
 .app.sidebar-collapsed {
-    grid-template-columns: 0 0 1fr;
+    grid-template-columns: 0 0 1fr var(--hubs-width);
 }
 
 .app.sidebar-collapsed.sidebar-right {
-    grid-template-columns: 1fr 0 0;
+    grid-template-columns: var(--hubs-width) 1fr 0 0;
 }
 
 .app.sidebar-collapsed .sidebar,
@@ -2331,3 +2336,46 @@ video.draw-video-full { position: fixed; left: -10000px; top: 0; width: 10px; he
 /* videos / audio selected in the text (for Ctrl+C) */
 .video-embed.media-selected { outline: 3px solid #7c6ff0; outline-offset: 2px; }
 .voice-chip.media-selected { outline: 2px solid #7c6ff0; outline-offset: 2px; }
+
+/* ---------- Hubs bar (like the server list of Discord) ---------- */
+.hubs-bar {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 12px 0; background: #0b0c10; border-left: 1px solid var(--border);
+    overflow-y: auto; overflow-x: hidden; min-width: 0; z-index: 5;
+    scrollbar-width: none;
+}
+.sidebar-right .hubs-bar { border-left: 0; border-right: 1px solid var(--border); }
+.hubs-bar::-webkit-scrollbar { display: none; }
+.hub-sep { width: 32px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, .08); flex-shrink: 0; }
+.hub-btn {
+    position: relative; width: 48px; height: 48px; flex-shrink: 0; border: 0; padding: 0; cursor: pointer;
+    border-radius: 50%; background: #1e1f25; color: #dbdee1; font-size: 20px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-radius .18s ease, background-color .18s ease, color .18s ease;
+}
+.hub-btn:hover, .hub-btn.active { border-radius: 16px; background: var(--hub); color: #fff; }
+.hub-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* the little pill on the outer side: active = tall, hover = short */
+.hub-btn::before {
+    content: ''; position: absolute; right: -12px; top: 50%; width: 4px; height: 0; border-radius: 4px 0 0 4px;
+    background: #fff; transform: translateY(-50%); transition: height .18s ease;
+}
+.sidebar-right .hub-btn::before { right: auto; left: -12px; border-radius: 0 4px 4px 0; }
+.hub-btn:hover::before { height: 20px; }
+.hub-btn.active::before { height: 40px; }
+.hub-btn[data-hub="personal"] { --hub: #23a55a; }
+.hub-btn[data-hub="blue"] { --hub: #2f6fed; }
+.hub-btn[data-hub="orange"] { --hub: #e8442f; }
+.hub-btn[data-hub="friends"] { --hub: #8b5cf6; }
+/* the coloured square itself (not only on hover): a coloured ring */
+.hub-btn { box-shadow: inset 0 0 0 2px var(--hub); }
+.hub-btn:hover, .hub-btn.active { box-shadow: none; }
+.hub-tip {
+    position: fixed; z-index: 3000; pointer-events: none; padding: 7px 11px; border-radius: 6px;
+    background: #111214; color: #f2f3f5; font-size: 13px; font-weight: 600; white-space: nowrap;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .5); transform: translateY(-50%);
+}
+.hub-tip[hidden] { display: none; }
+.hub-tip::after { content: ''; position: absolute; top: 50%; right: -5px; transform: translateY(-50%); border: 5px solid transparent; border-right: 0; border-left-color: #111214; }
+.hub-tip.right::after { right: auto; left: -5px; border: 5px solid transparent; border-left: 0; border-right-color: #111214; }
+@media (max-width: 760px) { .hubs-bar { display: none; } }

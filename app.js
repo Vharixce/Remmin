@@ -11503,6 +11503,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Hubs bar (Personal stuff, Blue Hub, Orange Hub, Friends Hub) on the other side of the Explorer',
         'Ctrl+C / Ctrl+V of pictures, videos and audio between Text, Collage and Draw (several at once)',
         'Compress audio (right-click) + undo; "Keep this size" for videos, audio and pictures',
         'Audio: timeline to click / drag, and 15 s back / forward buttons',
@@ -13014,6 +13015,32 @@ RemminStore.ready.then(() => {
         updateStorageMeters();
     }
     RemminStore.onChange(updateStorageMeters);
+
+    /* ---- Hubs bar: for now only shows the hubs (what each one does comes later) ---- */
+    (() => {
+        const bar = $('hubsBar');
+        if (!bar) return;
+        const tip = document.createElement('div');
+        tip.className = 'hub-tip';
+        tip.hidden = true;
+        document.body.appendChild(tip);
+        const showTip = (btn) => {
+            const r = btn.getBoundingClientRect();
+            const onRight = !$('app').classList.contains('sidebar-right'); // the bar is on the right: the label goes left of it
+            tip.textContent = btn.dataset.name;
+            tip.hidden = false;
+            tip.classList.toggle('right', !onRight);
+            tip.style.top = `${r.top + r.height / 2}px`;
+            tip.style.left = onRight ? `${r.left - tip.offsetWidth - 12}px` : `${r.right + 12}px`;
+        };
+        bar.addEventListener('mouseover', (e) => { const b = e.target.closest('.hub-btn'); if (b) showTip(b); });
+        bar.addEventListener('mouseout', (e) => { if (!e.relatedTarget || !bar.contains(e.relatedTarget) || !e.relatedTarget.closest('.hub-btn')) tip.hidden = true; });
+        bar.addEventListener('click', (e) => {
+            const b = e.target.closest('.hub-btn');
+            if (!b) return;
+            bar.querySelectorAll('.hub-btn').forEach((x) => x.classList.toggle('active', x === b));
+        });
+    })();
 
     /* ---- click the storage bars: which notes use the most space (after the Private Note Pass) ---- */
     const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);

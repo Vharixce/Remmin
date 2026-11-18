@@ -2472,6 +2472,69 @@ RemminStore.ready.then(() => {
         const t = preset.targetBytes;
         toast(`Picture compressed: ${fmtSize(sizeOfData(src))} → ${fmtSize(sizeOfData(out))}${t && sizeOfData(out) > t ? ' (the smallest possible)' : ''}`);
     }
+    /* ---- Ctrl+C / Ctrl+V of pictures, videos and audio between Text, Collage and Draw (several at once) ----
+     * The items go on the clipboard as JSON (own type), the pictures also as html for other programs. */
+    const ITEMS_TYPE = 'application/x-remmin-items';
+    const ITEMS_MARK = '[Remmin items]';
+    function cleanClipItem(it) {
+        if (!it || typeof it !== 'object' || typeof it.src !== 'string') return null;
+        if (it.kind === 'image' && /^data:image\//i.test(it.src.slice(0, 20))) return { kind: 'image', src: it.src };
+        if (it.kind === 'video' && isVideoSrc(it.src)) {
+            const w = Math.round(Number(it.w));
+            return { kind: 'video', src: it.src, loop: !!it.loop, ...(w >= 10 && w <= 100 ? { w } : {}) };
+        }
+        if (it.kind === 'audio' && isVoiceSrc(it.src)) {
+            const vol = Math.round(Number(it.vol));
+            return { kind: 'audio', src: it.src, name: String(it.name || 'Voice note').slice(0, 200), duration: Number(it.duration) || 0, loop: !!it.loop, vol: Number.isFinite(vol) && vol >= 0 && vol <= 100 ? vol : 100 };
+        }
+        return null;
+    }
+    function writeClipItems(e, items, plain = ITEMS_MARK) {
+        const list = items.map(cleanClipItem).filter(Boolean);
+        if (!list.length || !e.clipboardData) return false;
+        e.clipboardData.setData(ITEMS_TYPE, JSON.stringify(list));
+        const pics = list.filter((it) => it.kind === 'image');
+        if (pics.length) e.clipboardData.setData('text/html', pics.map((it) => `<img src="${it.src.replace(/"/g, '&quot;')}">`).join(''));
+        e.clipboardData.setData('text/plain', plain);
+        return true;
+    }
+    // the copied items; fromHtml: also pictures / videos / audio in html copied from the text (when there is no other text)
+    function readClipItems(e, fromHtml = false) {
+        const dt = e.clipboardData;
+        if (!dt) return [];
+        const raw = dt.getData(ITEMS_TYPE);
+        if (raw) {
+            try { const list = JSON.parse(raw); return Array.isArray(list) ? list.map(cleanClipItem).filter(Boolean) : []; } catch (_) { return []; }
+        }
+        if (!fromHtml) return [];
+        const html = dt.getData('text/html');
+        if (!html || !/data-video=|data-voice=|<img/i.test(html)) return [];
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const out = [];
+        doc.body.querySelectorAll('img, [data-video], span[data-voice]').forEach((el) => {
+            if (el.matches('img')) { if (!el.closest('[data-video]')) out.push({ kind: 'image', src: el.getAttribute('src') || '' }); }
+            else if (el.hasAttribute('data-video')) out.push({ kind: 'video', src: el.getAttribute('data-video'), loop: el.getAttribute('data-loop') === '1', w: el.getAttribute('data-w') });
+            else out.push({ kind: 'audio', src: el.getAttribute('data-voice'), name: el.getAttribute('data-name'), duration: el.getAttribute('data-duration'), loop: el.getAttribute('data-loop') === '1', vol: el.getAttribute('data-vol') === null ? 100 : el.getAttribute('data-vol') });
+            el.remove();
+        });
+        if (doc.body.textContent.replace(/[\s\u00a0⠿▶⏸⏪⏩🔁🔊✕🎤]/g, '').replace(/\d+:\d+/g, '').trim()) return []; // there is text too: the normal paste
+        return out.map(cleanClipItem).filter(Boolean);
+    }
+    // paste the items in the text (at the cursor, in order)
+    async function pasteItemsInText(items) {
+        for (const it of items) {
+            if (it.kind === 'image') await insertImageFiles([it.src]);
+            else if (it.kind === 'video') {
+                const box = insertVideoInText(it.src);
+                if (box) {
+                    if (it.loop && isMediaRef(it.src)) { box.setAttribute('data-loop', '1'); const v = box.querySelector('video'); if (v) v.loop = true; }
+                    if (it.w) { box.setAttribute('data-w', String(it.w)); box.style.width = `${it.w}%`; }
+                }
+            } else insertVoiceChip(it.src, it.name, it.duration, it.loop, it.vol);
+        }
+        markTextChanged();
+    }
+
     // copy a picture so it can be pasted in Text, Collage or Draw
     const PIC_MARK = 'remmin-picture-copy';
     function copyPictureSrc(src) {
@@ -3297,22 +3360,48 @@ RemminStore.ready.then(() => {
     const hideDropOutline = () => { dropOutline.hidden = true; };
 
     // Ctrl+C on a clicked picture copies the picture (also when no text is selected)
-    editorEl.addEventListener('copy', (e) => {
-        if (!selectedImg || !editorEl.contains(selectedImg) || !e.clipboardData) return;
+    // videos and audio selected in the text (click their bar / handle; Shift+click: one more)
+    let textMediaSel = [];
+    function selectTextMedia(el, add = false) {
+        textMediaSel = textMediaSel.filter((x) => editorEl.contains(x));
+        if (add && el) textMediaSel = textMediaSel.includes(el) ? textMediaSel.filter((x) => x !== el) : [...textMediaSel, el];
+        else textMediaSel = el ? [el] : [];
+        editorEl.querySelectorAll('.media-selected').forEach((x) => x.classList.remove('media-selected'));
+        textMediaSel.forEach((x) => x.classList.add('media-selected'));
+    }
+    // everything selected in the text, in the order of the text
+    function textSelectedItems() {
+        const els = [...selectedImgs, ...textMediaSel].filter((x) => editorEl.contains(x));
+        els.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+        return els.map((el) => (el.matches('img') ? { kind: 'image', src: el.getAttribute('src') || '' }
+            : el.classList.contains('video-embed') ? { kind: 'video', src: el.getAttribute('data-video'), loop: el.getAttribute('data-loop') === '1', w: el.getAttribute('data-w') }
+                : { kind: 'audio', src: el.getAttribute('data-voice'), name: el.getAttribute('data-name'), duration: el.getAttribute('data-duration'), loop: el.getAttribute('data-loop') === '1', vol: chipVolume(el) }));
+    }
+    ['copy', 'cut'].forEach((type) => editorEl.addEventListener(type, (e) => {
+        if (!e.clipboardData || state.prefs.mode !== 'text') return;
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed && sel.toString().trim()) return; // copying text: normal copy
+        const items = textSelectedItems();
+        if (!items.length) return;
         e.preventDefault();
-        const src = selectedImg.getAttribute('src') || '';
-        e.clipboardData.setData('text/html', `<img src="${src.replace(/"/g, '&quot;')}">`);
-        e.clipboardData.setData('text/plain', '');
-        toast('Picture copied — paste it with Ctrl+V (also in the drawing)');
-    });
+        writeClipItems(e, items);
+        if (type === 'cut') {
+            recordText();
+            [...selectedImgs, ...textMediaSel].forEach((x) => x.remove());
+            selectImage(null); selectTextMedia(null);
+            markTextChanged();
+        }
+        toast(`${items.length > 1 ? `${items.length} items` : items[0].kind === 'image' ? 'Picture' : items[0].kind === 'video' ? 'Video' : 'Audio'} ${type === 'cut' ? 'cut' : 'copied'}: paste with Ctrl+V in Text, Collage or Draw`);
+    }));
 
     editorEl.addEventListener('paste', (e) => {
         const dt = e.clipboardData;
         if (!dt) return;
         // in Draw / Grid the text is hidden (but may still have the focus): leave the paste to them
         if (state.prefs.mode !== 'text') return;
+        // pictures, videos and audio copied with Ctrl+C in Text, Collage or Draw
+        const clipItems = readClipItems(e);
+        if (clipItems.length) { e.preventDefault(); pasteItemsInText(clipItems); return; }
         // a video copied with "Copy video"
         const copiedVid = pastedVideoRef(e);
         if (copiedVid) { e.preventDefault(); insertVideoInText(copiedVid); return; }
@@ -3549,7 +3638,13 @@ RemminStore.ready.then(() => {
         video.draggable = e.clientY - video.getBoundingClientRect().top < 24;
     });
     editorEl.addEventListener('click', (e) => {
-        if (e.target.closest('.voice-chip')) { handleVoiceChipClick(e); return; }
+        const chipHit = e.target.closest('.voice-chip');
+        if (chipHit && editorEl.contains(chipHit) && (e.target === chipHit || e.target.closest('.voice-handle, .voice-time, .voice-vol-icon'))) {
+            // click on the audio itself (not a button): select it (Shift: one more)
+            if (!e.shiftKey) selectImage(null);
+            selectTextMedia(chipHit, e.shiftKey);
+        }
+        if (chipHit) { handleVoiceChipClick(e); return; }
 
         const link = e.target.closest('a[href]');
         if (link && editorEl.contains(link) && !window.getSelection().toString()) {
@@ -3557,16 +3652,18 @@ RemminStore.ready.then(() => {
             if (SAFE_LINK_RE.test(link.getAttribute('href'))) window.open(link.getAttribute('href'), '_blank', 'noopener');
             return;
         }
+        // click the bar of a video: select it (Shift: one more); right-click: its options
         const video = e.target.closest('.video-embed');
         if (video && editorEl.contains(video) && e.target.tagName !== 'VIDEO' && !e.target.closest('.ve-handle')) {
             if (Date.now() - videoMovedAt < 400) return;
-            const r = video.getBoundingClientRect();
-            menuAt(Math.min(e.clientX, r.right), e.clientY, 'Video', textVideoActions(video));
+            if (!e.shiftKey) selectImage(null);
+            selectTextMedia(video, e.shiftKey);
             return;
         }
         const img = e.target.closest('img');
         if (e.shiftKey && img && editorEl.contains(img)) { e.preventDefault(); selectImage(img, true); return; }
-        if (e.shiftKey && !img && selectedImgs.length) return; // Shift + click on text keeps the pictures selected
+        if (e.shiftKey && !img && (selectedImgs.length || textMediaSel.length)) return; // Shift + click on text keeps the selection
+        selectTextMedia(null);
         selectImage(img && editorEl.contains(img) ? img : null);
     });
     // Tab / Shift+Tab inside a list: indent / outdent the item
@@ -3581,11 +3678,14 @@ RemminStore.ready.then(() => {
         markTextChanged();
     });
     editorEl.addEventListener('keydown', (e) => {
-        if (selectedImg && (e.key === 'Delete' || e.key === 'Backspace')) {
+        textMediaSel = textMediaSel.filter((x) => editorEl.contains(x));
+        if ((selectedImg || textMediaSel.length) && (e.key === 'Delete' || e.key === 'Backspace')) {
             e.preventDefault();
             recordText();
             selectedImgs.forEach((i) => i.remove());
+            textMediaSel.forEach((x) => { if (voicePlayingChip === x) stopVoicePlayback(); x.remove(); });
             selectImage(null);
+            selectTextMedia(null);
             markTextChanged();
         }
     });
@@ -3928,6 +4028,7 @@ RemminStore.ready.then(() => {
         const block = videoBlock(document, src);
         placeLine(block, point.inline ? { before: point.line && point.line.nextSibling } : point);
         markTextChanged();
+        return block;
     }
     $('insertVideoEmbedBtn').addEventListener('click', async () => {
         if (!noteById(state.currentNoteId)) return;
@@ -7463,13 +7564,29 @@ RemminStore.ready.then(() => {
     }
     const copyImgHtml = (src) => (src ? `<img data-remmin-copy="1" src="${src}">` : '');
 
+    // the picture / video that is being placed (no select tool): Ctrl+C copies it
+    ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
+        if (!drawPickActive() || (state.draw.tool === 'select' && drawPick.length) || !drawSel || !state.draw.strokes.includes(drawSel) || !drawSel.image) return;
+        e.preventDefault();
+        writeClipItems(e, [drawSel.video ? { kind: 'video', src: drawSel.video, loop: drawSel.loop !== false } : { kind: 'image', src: drawSel.image }]);
+        if (type === 'cut') { pushDrawUndo(); state.draw.strokes = state.draw.strokes.filter((st) => st !== drawSel); drawSel = null; renderStrokes(); flushEditor(); }
+        toast(`${drawSel && drawSel.video ? 'Video' : 'Picture'} ${type === 'cut' ? 'cut' : 'copied'}: paste with Ctrl+V in Text, Collage or Draw`);
+    }));
     ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
         if (!drawPickActive() || state.draw.tool !== 'select' || !drawPick.length) return;
         e.preventDefault();
         drawClipboard = drawPick.map(cloneItem);
         if (e.clipboardData) {
             e.clipboardData.setData('text/plain', COPY_MARK);
-            e.clipboardData.setData('text/html', copyImgHtml(drawPickPng())); // pastes as a picture in the text
+            const png = drawPickPng();
+            e.clipboardData.setData('text/html', copyImgHtml(png)); // pastes as a picture in the text
+            // only pictures / videos picked: they go to Text and Collage as they are (videos keep playing)
+            const onlyMedia = drawPick.every((st) => st.image);
+            const media = drawPick.filter((st) => st.image).map((st) => (st.video ? { kind: 'video', src: st.video, loop: st.loop !== false } : { kind: 'image', src: st.image }));
+            const items = onlyMedia ? media : [{ kind: 'image', src: png }, ...media.filter((m) => m.kind === 'video')];
+            if (items.length) {
+                e.clipboardData.setData(ITEMS_TYPE, JSON.stringify(items.map(cleanClipItem).filter(Boolean)));
+            }
         }
         if (type === 'cut') deletePick();
         else toast('Copied — Ctrl+V pastes it here, or as a picture in the text');
@@ -8003,6 +8120,19 @@ RemminStore.ready.then(() => {
         if (document.querySelector('.modal.active')) return;
         const typing = e.target.closest && e.target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]');
         if (typing && typing.offsetParent !== null) return;
+        // pictures / videos copied with Ctrl+C in Text or Collage (a copy made in the drawing itself is pasted as is)
+        const plainMark = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+        if (!(plainMark === COPY_MARK && drawClipboard)) {
+            const clipItems = readClipItems(e, true);
+            if (clipItems.length && !isPrivateLocked(noteById(state.currentNoteId))) {
+                e.preventDefault();
+                const pics = clipItems.filter((it) => it.kind === 'image').map((it) => it.src);
+                const vids = clipItems.filter((it) => it.kind === 'video').map((it) => it.src);
+                if (clipItems.some((it) => it.kind === 'audio')) toast('Audio can go in Text and Collage (not in a drawing)');
+                (async () => { if (pics.length) await addDrawImages(pics); if (vids.length) await addDrawVideoRefs(vids); })();
+                return;
+            }
+        }
         const copiedVid = pastedVideoRef(e);
         if (copiedVid) { e.preventDefault(); addDrawVideoRefs([copiedVid]); return; }
         if (pastedAudio(e)) { e.preventDefault(); toast('Audio can go in Text and Collage (not in a drawing)'); return; }
@@ -9220,6 +9350,18 @@ RemminStore.ready.then(() => {
             remove: () => { if (voicePlayingChip === chip) stopVoicePlayback(); cb.sel = new Set([it.id]); cbDelete(); }
         });
     }
+    async function cbPasteItems(items) {
+        const c = cbViewCenter();
+        let k = 0;
+        const next = () => { const o = (k++) * 36; return { x: c.x + o, y: c.y + o }; };
+        for (const it of items) {
+            if (it.kind === 'image') await cbAddImages([it.src], next());
+            else if (it.kind === 'video') {
+                cbAddVideo(it.src, next());
+                if (it.loop) { const last = cb.items[cb.items.length - 1]; if (last && last.type === 'video') { last.loop = true; cbRender(); cbSave(); } }
+            } else cbAddAudio({ src: it.src, name: it.name, duration: it.duration, loop: it.loop, vol: it.vol }, next());
+        }
+    }
     function cbAddVideo(src, at) {
         const note = noteById(cb.noteId);
         if (!note || isPrivateLocked(note)) return;
@@ -9971,9 +10113,11 @@ RemminStore.ready.then(() => {
         const ids = cbExpanded(cb.sel);
         cbClipboard = cbClone(cb.items.filter((it) => ids.has(it.id)));
         e.clipboardData.setData('text/plain', CB_MARK);
-        // the pictures also as html, so they can be pasted in Text and Draw
-        const pics = cbClipboard.filter((it) => it.type === 'image' && typeof it.src === 'string' && it.src.startsWith('data:image/'));
-        if (pics.length) e.clipboardData.setData('text/html', pics.map((it) => `<img src="${it.src.replace(/"/g, '&quot;')}">`).join(''));
+        // pictures, videos and audio also for Text and Draw
+        const media = cbClipboard.filter((it) => it.type === 'image' || it.type === 'video' || it.type === 'audio')
+            .map((it) => (it.type === 'image' ? { kind: 'image', src: it.src } : it.type === 'video' ? { kind: 'video', src: it.src, loop: !!it.loop }
+                : { kind: 'audio', src: it.src, name: it.name, duration: it.duration, loop: !!it.loop, vol: Number.isFinite(it.volume) ? it.volume : 100 }));
+        if (media.length) writeClipItems(e, media, CB_MARK);
         e.preventDefault();
         if (cut) cbDelete();
     }
@@ -9982,6 +10126,11 @@ RemminStore.ready.then(() => {
     document.addEventListener('paste', (e) => {
         if (!cbActive() || !e.clipboardData) return;
         if (Date.now() - cbMiddleAt < 1500) { e.preventDefault(); return; }
+        // pictures, videos and audio from Text / Draw (a copy made on the board itself is pasted as board items)
+        if (!cb.editing && !cbTypingElsewhere(e) && !(e.clipboardData.getData('text/plain') === CB_MARK && cbClipboard)) {
+            const clipItems = readClipItems(e, true);
+            if (clipItems.length) { e.preventDefault(); cbPasteItems(clipItems); return; }
+        }
         const copiedVid = !cb.editing && !cbTypingElsewhere(e) && pastedVideoRef(e);
         if (copiedVid) { e.preventDefault(); cbAddVideo(copiedVid); return; }
         const copiedAud = !cb.editing && !cbTypingElsewhere(e) && pastedAudio(e);
@@ -11354,6 +11503,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'Ctrl+C / Ctrl+V of pictures, videos and audio between Text, Collage and Draw (several at once)',
         'Compress audio (right-click) + undo; "Keep this size" for videos, audio and pictures',
         'Audio: timeline to click / drag, and 15 s back / forward buttons',
         'Audio stored once (like videos), much faster audio compression, choose the MB size for too-big files',

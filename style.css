@@ -2327,3 +2327,7 @@ video.draw-video-full { position: fixed; left: -10000px; top: 0; width: 10px; he
 .voice-chip .voice-seek { width: 90px; height: 14px; margin: 0 2px; accent-color: #7c6ff0; cursor: pointer; flex-shrink: 1; min-width: 40px; }
 .voice-chip .voice-vol-icon { font-size: 11px; opacity: .75; margin-left: 4px; }
 .voice-chip .voice-vol { width: 48px; }
+
+/* videos / audio selected in the text (for Ctrl+C) */
+.video-embed.media-selected { outline: 3px solid #7c6ff0; outline-offset: 2px; }
+.voice-chip.media-selected { outline: 2px solid #7c6ff0; outline-offset: 2px; }

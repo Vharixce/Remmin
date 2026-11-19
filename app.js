@@ -11505,8 +11505,9 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
-    const APP_BUILD = '2026-11-19.2';
+    const APP_BUILD = '2026-11-19.3';
     const PATCH_HISTORY = [
+        'GitHub sync: videos / audio as separate files (no more "file is too large"), only new media is uploaded',
         'Sync fix: no more endless fetching / pushing (stale GitHub reads, too-big files, older Remmin on another device)',
         'The note you had open last opens again when you come back',
         'Hubs bar (Personal stuff, Blue Hub, Orange Hub, Friends Hub) on the other side of the Explorer',
@@ -11968,27 +11969,136 @@ RemminStore.ready.then(() => {
         err.quiet = true;
         throw err;
     }
+    /* GitHub storage (since 2026-11-19): remmin.json holds the notes; every video / audio is its own file in
+     * remmin-media/ (uploaded once, through the Git Data API, which takes files up to 100 MB each).
+     * One sync = one commit, so the notes and their media always change together. */
+    const ghRepoUrl = (rest) => `https://api.github.com/repos/${encodeURIComponent(githubConfig.owner)}/${encodeURIComponent(githubConfig.repo)}${rest}`;
+    async function ghBranch() {
+        if (githubConfig.branch) return githubConfig.branch;
+        const repo = await githubRequest('GET', null, ghRepoUrl(''));
+        if (!repo) throw new Error(`GitHub can't find ${githubConfig.owner}/${githubConfig.repo}`);
+        githubConfig.branch = repo.default_branch || 'main';
+        return githubConfig.branch;
+    }
+    // the newest commit of the branch (null: the repo is still empty)
+    async function ghHead() {
+        const branch = await ghBranch();
+        const ref = await githubRequest('GET', null, ghRepoUrl(`/git/ref/heads/${branch.split('/').map(encodeURIComponent).join('/')}`));
+        return ref && ref.object ? ref.object.sha : null;
+    }
+    const ghMediaDir = () => { const pth = githubConfig.path || 'remmin.json'; const i = pth.lastIndexOf('/'); return `${i >= 0 ? pth.slice(0, i + 1) : ''}remmin-media`; };
+    // the videos / audio of the remote file: the ones this device has are reused, the others are downloaded
+    async function ghLoadMedia(data) {
+        if (!data || Array.isArray(data) || !data.mediaIndex || typeof data.mediaIndex !== 'object') return;
+        const media = { ...(data.media && typeof data.media === 'object' ? data.media : {}) };
+        const todo = [];
+        Object.entries(data.mediaIndex).forEach(([id, info]) => {
+            if (!info || typeof info.sha !== 'string') return;
+            const have = state.media[id] || (state.mediaGone && state.mediaGone[id]);
+            if (have && have.length === info.len) media[id] = have; else todo.push([id, info]);
+        });
+        for (const [k, [id, info]] of todo.entries()) {
+            updateGithubStatus(`GitHub: downloading media ${k + 1}/${todo.length}…`);
+            const blob = await githubRequest('GET', null, ghRepoUrl(`/git/blobs/${info.sha}`));
+            if (blob && typeof blob.content === 'string') media[id] = `data:${info.mime || 'video/mp4'};base64,${blob.content.replace(/\s/g, '')}`;
+        }
+        data.media = media;
+    }
     async function fetchRemoteOnce() {
-        let meta = await githubRequest('GET');
+        const head = await ghHead();
+        if (!head) return null;
+        const at = `?ref=${head}`; // read exactly this commit (never an older copy)
         let url = githubUrl();
+        let meta = await githubRequest('GET', null, url + at);
         let legacy = false;
         if (!meta && githubConfig.legacyPath) {
             // remmin.json doesn't exist yet: start from the old remindate.json / notes.json
             url = githubUrl(githubConfig.legacyPath);
-            meta = await githubRequest('GET', null, url);
+            meta = await githubRequest('GET', null, url + at);
             legacy = true;
         }
         if (!meta) return null;
-        if (!legacy && Number.isFinite(meta.size)) { githubConfig.fileSize = meta.size; updateStorageMeters(); }
         let text;
         if (meta.content && meta.encoding === 'base64') text = decodeGithubFile(meta.content);
-        else text = await githubRequest('GET', null, url, 'application/vnd.github.raw+json'); // files > 1 MB
+        else text = await githubRequest('GET', null, url + at, 'application/vnd.github.raw+json'); // files > 1 MB
         const data = text && text.trim() ? JSON.parse(text) : [];
-        // from the old file: no sha, so the push creates remmin.json, and always push once
-        return legacy ? { sha: null, data, legacy: true } : { sha: meta.sha, data };
+        githubConfig.remoteMediaIndex = data && !Array.isArray(data) && data.mediaIndex && typeof data.mediaIndex === 'object' ? data.mediaIndex : {};
+        await ghLoadMedia(data);
+        if (!legacy) {
+            const mediaBytes = Object.values(githubConfig.remoteMediaIndex).reduce((t, m) => t + Math.round((m.len || 0) * 0.75), 0);
+            githubConfig.fileSize = (meta.size || 0) + mediaBytes;
+            updateStorageMeters();
+        }
+        // from the old file: always push once (that writes remmin.json)
+        return legacy ? { sha: head, data, legacy: true } : { sha: head, data };
     }
 
-    async function pushRemote(snap, sha) {
+    async function pushRemote(snap, parentSha) {
+        const parent = parentSha || await ghHead();
+        if (!parent) return pushRemoteContents(snap); // an empty repo: the first file the simple way
+        // 1) the videos / audio that GitHub doesn't have yet, each as its own file
+        const prevIndex = githubConfig.remoteMediaIndex || {};
+        const index = {};
+        const ids = Object.keys(snap.media || {});
+        const fresh = ids.filter((id) => !(prevIndex[id] && prevIndex[id].len === snap.media[id].length));
+        for (const [k, id] of fresh.entries()) {
+            updateGithubStatus(`GitHub: uploading media ${k + 1}/${fresh.length}…`);
+            const data = snap.media[id];
+            const cut = data.indexOf(';base64,');
+            const r = await githubRequest('POST', { content: data.slice(cut + 8), encoding: 'base64' }, ghRepoUrl('/git/blobs'));
+            index[id] = { sha: r.sha, mime: data.slice(5, cut), len: data.length };
+        }
+        ids.forEach((id) => { if (!index[id]) index[id] = prevIndex[id]; });
+        // 2) remmin.json, with only the list of media files
+        const payload = {
+            app: 'Remmin',
+            version: 2,
+            updatedAt: snap.updatedAt || new Date().toISOString(),
+            folders: snap.folders,
+            notes: snap.notes,
+            deleted: snap.deleted,
+            ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
+            ...(snap.settings ? { settings: snap.settings } : {}),
+            trash: snap.trash || [],
+            trashGone: snap.trashGone || {},
+            mediaIndex: index,
+            appBuild: APP_BUILD
+        };
+        const fileText = JSON.stringify(payload);
+        const fileBytes = new TextEncoder().encode(fileText).length;
+        if (fileBytes > 95 * 1048576) {
+            const err = new Error(`remmin.json would be ${(fileBytes / 1048576).toFixed(0)} MB (GitHub allows 100 MB per file): compress or remove some pictures (click the storage bars to see what is big)`);
+            err.tooBig = true;
+            throw err;
+        }
+        updateGithubStatus('GitHub: pushing…');
+        const jsonBlob = await githubRequest('POST', { content: fileText, encoding: 'utf-8' }, ghRepoUrl('/git/blobs'));
+        // 3) one commit with the new file, the new media files, and without the media nobody uses any more
+        const dir = ghMediaDir();
+        const tree = [{ path: githubConfig.path, mode: '100644', type: 'blob', sha: jsonBlob.sha }];
+        fresh.forEach((id) => tree.push({ path: `${dir}/${id}`, mode: '100644', type: 'blob', sha: index[id].sha }));
+        Object.keys(prevIndex).forEach((id) => { if (!index[id]) tree.push({ path: `${dir}/${id}`, mode: '100644', type: 'blob', sha: null }); });
+        const baseCommit = await githubRequest('GET', null, ghRepoUrl(`/git/commits/${parent}`));
+        const newTree = await githubRequest('POST', { base_tree: baseCommit.tree.sha, tree }, ghRepoUrl('/git/trees'));
+        const commit = await githubRequest('POST', { message: `Remmin sync ${new Date().toISOString()}`, tree: newTree.sha, parents: [parent] }, ghRepoUrl('/git/commits'));
+        try {
+            await githubRequest('PATCH', { sha: commit.sha, force: false }, ghRepoUrl(`/git/refs/heads/${(await ghBranch()).split('/').map(encodeURIComponent).join('/')}`));
+        } catch (err) {
+            // someone else pushed in between (not a fast-forward): fetch again and merge
+            if (err.status === 422) { const c = new Error('conflict'); c.status = 409; throw c; }
+            throw err;
+        }
+        githubConfig.sha = commit.sha;
+        githubConfig.remoteMediaIndex = index;
+        githubConfig.remoteUpdatedAt = payload.updatedAt;
+        githubConfig.fileSize = fileBytes + Object.values(index).reduce((t, m) => t + Math.round((m.len || 0) * 0.75), 0);
+        githubConfig.pushedSha = commit.sha;
+        githubConfig.pushedUpdatedAt = payload.updatedAt;
+        delete githubConfig.legacyPath; // remmin.json exists now
+    }
+
+    // only for an empty repo (the very first file)
+    async function pushRemoteContents(snap, sha) {
         const payload = {
             app: 'Remmin',
             version: 1,
@@ -12085,6 +12195,7 @@ RemminStore.ready.then(() => {
                 return r && { rev: r.sha, data: r.data };
             },
             async push(snap, rev) { await pushRemote(snap, rev); return githubConfig.sha; },
+            // (rev = the commit the merge was based on)
             setRev(rev) { githubConfig.sha = rev; },
             // 422 is only a conflict when it is about the sha (otherwise: a real error, e.g. too big)
             isConflict: (err) => err.status === 409 || (err.status === 422 && /sha/i.test(err.message || ''))

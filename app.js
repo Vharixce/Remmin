@@ -1595,6 +1595,8 @@ RemminStore.ready.then(() => {
     function renderEditor() {
         const note = noteById(state.currentNoteId);
         const empty = !note;
+        // remember the open note, so it opens again next time
+        if (note && state.prefs.lastNoteId !== note.id) { state.prefs.lastNoteId = note.id; savePrefs(); }
         // opening another note locks a private note again
         if ((note ? note.id : null) !== lastEditorNoteId) unlockedNoteId = null;
         lastEditorNoteId = note ? note.id : null;
@@ -11503,6 +11505,7 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     const PATCH_HISTORY = [
+        'The note you had open last opens again when you come back',
         'Hubs bar (Personal stuff, Blue Hub, Orange Hub, Friends Hub) on the other side of the Explorer',
         'Ctrl+C / Ctrl+V of pictures, videos and audio between Text, Collage and Draw (several at once)',
         'Compress audio (right-click) + undo; "Keep this size" for videos, audio and pictures',
@@ -13135,7 +13138,8 @@ RemminStore.ready.then(() => {
 
     load();
     applyLayout();
-    state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
+    // the note that was open last time (if it still exists), otherwise the newest
+    state.currentNoteId = (noteById(state.prefs.lastNoteId) ? state.prefs.lastNoteId : null) || sortedNotes(state.notes)[0]?.id || null;
     state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
 
     if (!state.prefs.expandedFolders.length) {

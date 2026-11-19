@@ -11504,7 +11504,10 @@ RemminStore.ready.then(() => {
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
+    // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
+    const APP_BUILD = '2026-11-19.2';
     const PATCH_HISTORY = [
+        'Sync fix: no more endless fetching / pushing (stale GitHub reads, too-big files, older Remmin on another device)',
         'The note you had open last opens again when you come back',
         'Hubs bar (Personal stuff, Blue Hub, Orange Hub, Friends Hub) on the other side of the Explorer',
         'Ctrl+C / Ctrl+V of pictures, videos and audio between Text, Collage and Draw (several at once)',
@@ -11952,7 +11955,20 @@ RemminStore.ready.then(() => {
     document.addEventListener('pointerup', pointerReleased);
     document.addEventListener('pointercancel', pointerReleased);
 
+    // GitHub can briefly hand out the version from before our last push: wait a moment and ask again
     async function fetchRemote() {
+        for (let i = 0; i < 6; i++) {
+            const r = await fetchRemoteOnce();
+            const stale = r && !r.legacy && githubConfig.pushedSha && r.sha !== githubConfig.pushedSha && githubConfig.pushedUpdatedAt
+                && r.data && !Array.isArray(r.data) && r.data.updatedAt && r.data.updatedAt < githubConfig.pushedUpdatedAt;
+            if (!stale) return r;
+            await new Promise((res) => setTimeout(res, 2000));
+        }
+        const err = new Error('GitHub still shows an older version of the file; trying again later');
+        err.quiet = true;
+        throw err;
+    }
+    async function fetchRemoteOnce() {
         let meta = await githubRequest('GET');
         let url = githubUrl();
         let legacy = false;
@@ -11984,10 +12000,16 @@ RemminStore.ready.then(() => {
             ...(snap.settings ? { settings: snap.settings } : {}),
             trash: snap.trash || [],
             trashGone: snap.trashGone || {},
-            media: snap.media || {}
+            media: snap.media || {},
+            appBuild: APP_BUILD
         };
         const fileText = JSON.stringify(payload, null, 2);
-        githubConfig.fileSize = new TextEncoder().encode(fileText).length;
+        const fileBytes = new TextEncoder().encode(fileText).length;
+        if (fileBytes > 95 * 1048576) {
+            const err = new Error(`the sync file would be ${(fileBytes / 1048576).toFixed(0)} MB, GitHub allows at most 100 MB: compress or remove some videos / audio / pictures (click the storage bars to see what is big)`);
+            err.tooBig = true;
+            throw err;
+        }
         const result = await githubRequest('PUT', {
             message: `Remmin sync ${new Date().toISOString()}`,
             content: encodeGithubFile(fileText),
@@ -11998,6 +12020,9 @@ RemminStore.ready.then(() => {
         }
         githubConfig.sha = result.content.sha;
         githubConfig.remoteUpdatedAt = payload.updatedAt;
+        githubConfig.fileSize = fileBytes;
+        githubConfig.pushedSha = result.content.sha;
+        githubConfig.pushedUpdatedAt = payload.updatedAt;
         delete githubConfig.legacyPath; // remmin.json exists now
     }
 
@@ -12061,7 +12086,8 @@ RemminStore.ready.then(() => {
             },
             async push(snap, rev) { await pushRemote(snap, rev); return githubConfig.sha; },
             setRev(rev) { githubConfig.sha = rev; },
-            isConflict: (err) => err.status === 409 || err.status === 422
+            // 422 is only a conflict when it is about the sha (otherwise: a real error, e.g. too big)
+            isConflict: (err) => err.status === 409 || (err.status === 422 && /sha/i.test(err.message || ''))
         },
         server: {
             id: 'server',
@@ -12084,7 +12110,8 @@ RemminStore.ready.then(() => {
                     ...(snap.settings ? { settings: snap.settings } : {}),
                     trash: snap.trash || [],
                     trashGone: snap.trashGone || {},
-                    media: snap.media || {}
+                    media: snap.media || {},
+                    appBuild: APP_BUILD
                 };
                 const r = await serverRequest('PUT', payload, rev);
                 serverConfig.remoteUpdatedAt = payload.updatedAt;
@@ -12099,8 +12126,10 @@ RemminStore.ready.then(() => {
     // Sync = 1) fetch the newest version, 2) merge it with this device,
     // 3) push the result back (only if the other side doesn't have it yet).
     let syncPending = new Set();
+    let pushTimes = [], syncPausedUntil = 0, warnedOldVersion = false;
     async function runSync(p, options = {}) {
         if (!p.configured()) return;
+        if (options.silent && Date.now() < syncPausedUntil) return; // auto-sync paused (see below)
         if (githubBusy) { syncPending.add(p.id); return; }
         githubBusy = true;
         let pulled = false, pushed = false;
@@ -12113,6 +12142,12 @@ RemminStore.ready.then(() => {
                 // You edited something while we were fetching: start over with the new data
                 if (state.updatedAt !== local.updatedAt) continue;
 
+                // the file was written by a newer Remmin: only take its changes, never overwrite it with this older version
+                const newerElsewhere = remote && remote.data && !Array.isArray(remote.data) && typeof remote.data.appBuild === 'string' && remote.data.appBuild > APP_BUILD;
+                if (newerElsewhere && !warnedOldVersion) {
+                    warnedOldVersion = true;
+                    toast('Remmin was updated on another device: reload this page (Ctrl+F5) to get the new version. Until then this device only fetches.', { persistent: true, key: 'old-version', buttons: [{ label: 'Reload', onClick: () => location.reload() }] });
+                }
                 let merged = local;
                 let remoteSnap = null;
                 if (remote) {
@@ -12124,7 +12159,17 @@ RemminStore.ready.then(() => {
                     applySnapshot(merged);
                     pulled = true;
                 }
-                if (!remote || remote.forcePush || snapshotKey(merged) !== snapshotKey(remoteSnap)) {
+                if (!newerElsewhere && (!remote || remote.forcePush || snapshotKey(merged) !== snapshotKey(remoteSnap))) {
+                    // safety: many pushes in a short time means something keeps undoing them: pause auto-sync
+                    const now = Date.now();
+                    pushTimes = pushTimes.filter((t) => now - t < 3 * 60000);
+                    if (pushTimes.length >= 8) {
+                        syncPausedUntil = now + 5 * 60000;
+                        updateGithubStatus(`${p.label}: paused`);
+                        toast('Sync paused for 5 minutes: the file kept changing back and forth. Is Remmin open on another device or tab with an older version? Reload it there.', { label: 'Sync now', onClick: () => { syncPausedUntil = 0; pushTimes = []; syncAll(configuredProviders()); } });
+                        return;
+                    }
+                    pushTimes.push(now);
                     updateGithubStatus(`${p.label}: pushing…`);
                     try {
                         p.setRev(await p.push(merged, remote && remote.rev));
@@ -12154,7 +12199,8 @@ RemminStore.ready.then(() => {
         } catch (err) {
             console.error(`${p.label} sync failed`, err);
             updateGithubStatus(`${p.label}: sync failed`);
-            toast(`${p.label} sync failed: ${err.message}`);
+            if (err.tooBig) syncPausedUntil = Date.now() + 10 * 60000; // don't keep trying the same too-big file
+            if (!(err.quiet && options.silent)) toast(`${p.label} sync failed: ${err.message}`);
         } finally {
             githubBusy = false;
             const next = [...syncPending][0];

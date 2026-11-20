@@ -1404,6 +1404,7 @@ RemminStore.ready.then(() => {
             gridType: 'square',
             grids: {},
             strokes: [],
+            windows: [], // a new note starts without windows: add them with the + button
             order: topOrder()
         };
         state.notes.push(note);
@@ -8470,8 +8471,71 @@ RemminStore.ready.then(() => {
         $('brushSizeLabel').textContent = state.draw.size;
     });
 
+    /* ---- the windows of a note (Text, Collage, Draw, Project): a new note has none, + adds them ---- */
+    const ALL_WINDOWS = ['text', 'collage', 'draw', 'project'];
+    const WINDOW_INFO = { text: ['Text', '📝'], collage: ['Collage', '🧩'], draw: ['Draw', '✏️'], project: ['Project', '📋'] };
+    // older notes (from before windows existed) have all four
+    const noteWindows = (note) => (note && Array.isArray(note.windows) ? ALL_WINDOWS.filter((w) => note.windows.includes(w)) : ALL_WINDOWS.slice());
+    function updateWindowTabs(note) {
+        const wins = noteWindows(note);
+        const show = (id, w) => { $(id).hidden = !wins.includes(w); };
+        show('modeText', 'text'); show('modeCollage', 'collage'); show('modeDraw', 'draw'); show('modeProject', 'project');
+        $('addWindowBtn').hidden = !note || wins.length === ALL_WINDOWS.length;
+        $('addWindowBtn').classList.toggle('big', !!note && !wins.length);
+    }
+    function addWindow(w) {
+        const note = noteById(state.currentNoteId);
+        if (!note || isPrivateLocked(note)) return;
+        const wins = noteWindows(note);
+        if (wins.includes(w)) { setMode(w); return; }
+        note.windows = ALL_WINDOWS.filter((x) => x === w || wins.includes(x));
+        touch(note);
+        saveNotes();
+        updateWindowTabs(note);
+        setMode(w);
+    }
+    function removeWindow(w) {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        note.windows = noteWindows(note).filter((x) => x !== w);
+        touch(note);
+        saveNotes();
+        updateWindowTabs(note);
+        setMode(note.windows[0] || w);
+        toast(`${WINDOW_INFO[w][0]} window removed (what was in it stays saved: add the window again to see it)`);
+    }
+    $('noWindows').addEventListener('click', (e) => { const b = e.target.closest('[data-window]'); if (b) addWindow(b.dataset.window); });
+    $('addWindowBtn').addEventListener('click', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const wins = noteWindows(note);
+        showMenu($('addWindowBtn'), 'Add a window', ALL_WINDOWS.filter((w) => !wins.includes(w))
+            .map((w) => ({ label: WINDOW_INFO[w][0], icon: WINDOW_INFO[w][1], run: () => addWindow(w) })));
+    });
+    // right-click a window tab: remove it from this note
+    ['modeText', 'modeCollage', 'modeDraw', 'modeProject'].forEach((id) => $(id).addEventListener('contextmenu', (e) => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        e.preventDefault();
+        const w = id.slice(4).toLowerCase();
+        menuAt(e.clientX, e.clientY, WINDOW_INFO[w][0], [{ label: `Remove the ${WINDOW_INFO[w][0]} window from this note`, icon: '✕', danger: true, run: () => removeWindow(w) }]);
+    }));
+
     function setMode(mode) {
         if (!['text', 'collage', 'project', 'draw', 'grid'].includes(mode)) mode = 'text';
+        // only the windows this note has (Grid is part of Draw)
+        const winNote = noteById(state.currentNoteId);
+        const wins = noteWindows(winNote);
+        updateWindowTabs(winNote);
+        const noWindows = !!winNote && !wins.length;
+        $('noWindows').hidden = !noWindows;
+        if (noWindows) {
+            ['collageBoard', 'collageToolbar', 'projectBoard', 'textToolbar', 'drawToolbar', 'gridToolbar', 'zoomHint'].forEach((id) => { $(id).style.display = 'none'; });
+            editorEl.style.display = 'none'; drawContainer.style.display = 'none'; gridContainer.style.display = 'none';
+            ['modeText', 'modeCollage', 'modeDraw', 'modeProject'].forEach((id) => $(id).classList.remove('active'));
+            return;
+        }
+        if (winNote && !wins.includes(mode === 'grid' ? 'draw' : mode)) mode = wins.includes(state.prefs.mode === 'grid' ? 'draw' : state.prefs.mode) ? state.prefs.mode : wins[0];
         if (typeof placeImgHandle === 'function') requestAnimationFrame(placeImgHandle);
         if (mode !== 'collage' && typeof cbEndEdit === 'function') cbEndEdit(true);
         state.prefs.mode = mode;
@@ -11577,6 +11641,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-20.1';
     const PATCH_HISTORY = [
+        'New notes start empty: add Text, Collage, Draw or Project windows with the + button',
         'Videos play on phones (Convert to MP4 for WebM); Hubs bar can collapse and shows on phones; hubs renamed',
         'GitHub sync: videos / audio as separate files (no more "file is too large"), only new media is uploaded',
         'Sync fix: no more endless fetching / pushing (stale GitHub reads, too-big files, older Remmin on another device)',

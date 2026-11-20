@@ -127,6 +127,17 @@
                             <button class="toggle-btn" id="modeCollage">Collage</button>
                             <button class="toggle-btn" id="modeDraw">Draw</button>
                             <button class="toggle-btn" id="modeProject">Project</button>
+                            <button class="toggle-btn add-window-btn" id="addWindowBtn" type="button" title="Add a window to this note (right-click a window to remove it)" hidden>+</button>
+                        </div>
+                    </div>
+                    <div class="no-windows" id="noWindows" hidden>
+                        <div class="nw-title">This note has no windows yet</div>
+                        <div class="nw-text">Add one (or more) to start:</div>
+                        <div class="nw-buttons">
+                            <button type="button" class="nw-btn" data-window="text"><span>📝</span>Text</button>
+                            <button type="button" class="nw-btn" data-window="collage"><span>🧩</span>Collage</button>
+                            <button type="button" class="nw-btn" data-window="draw"><span>✏️</span>Draw</button>
+                            <button type="button" class="nw-btn" data-window="project"><span>📋</span>Project</button>
                         </div>
                     </div>
 

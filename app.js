@@ -2026,6 +2026,21 @@ RemminStore.ready.then(() => {
         }
         return out;
     }
+    // data:…;base64 text → a file in memory (in pieces: works on phones too, also for big videos)
+    function dataUrlToBlob(data) {
+        const cut = data.indexOf(';base64,');
+        const mime = data.slice(5, cut).split(';')[0] || 'application/octet-stream';
+        const b64 = data.slice(cut + 8);
+        const parts = [];
+        const step = 4 * 1024 * 1024; // a multiple of 4
+        for (let i = 0; i < b64.length; i += step) {
+            const bin = atob(b64.slice(i, i + step));
+            const u = new Uint8Array(bin.length);
+            for (let j = 0; j < bin.length; j++) u[j] = bin.charCodeAt(j);
+            parts.push(u);
+        }
+        return new Blob(parts, { type: mime });
+    }
     // a playable address for a media video (made once per video)
     const mediaUrls = new Map(); // id → { url, len }
     async function mediaUrl(ref) {
@@ -2034,7 +2049,7 @@ RemminStore.ready.then(() => {
         const id = ref.slice(6);
         const c = mediaUrls.get(id);
         if (c && c.len === data.length) return c.url;
-        const blob = await (await fetch(data)).blob();
+        const blob = dataUrlToBlob(data);
         const again = mediaUrls.get(id);
         if (again && again.len === data.length) return again.url;
         if (again) URL.revokeObjectURL(again.url);
@@ -2046,7 +2061,11 @@ RemminStore.ready.then(() => {
     function refreshMediaPlayers(id) {
         const c = mediaUrls.get(id);
         if (c) { URL.revokeObjectURL(c.url); mediaUrls.delete(id); }
-        document.querySelectorAll(`video[data-media="media:${id}"]`).forEach((v) => { v.removeAttribute('src'); v.load(); hydrateLocalVideos(v); });
+        document.querySelectorAll(`video[data-media="media:${id}"]`).forEach((v) => {
+            const err = v.nextElementSibling;
+            if (err && err.classList.contains('video-error')) err.remove();
+            v.removeAttribute('src'); v.load(); hydrateLocalVideos(v);
+        });
         if (typeof dropDrawVideo === 'function') dropDrawVideo(`media:${id}`);
     }
 
@@ -2075,7 +2094,8 @@ RemminStore.ready.then(() => {
     }
     // maxH 'auto': the resolution follows the bitrate (for "compress to … MB")
     async function compressVideoUrl(url, { maxH = 720, bitrate = 1600000, maxBytes = 0, label = 'video', audioBps = 96000 } = {}) {
-        const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
+        // MP4 (H.264) first: that plays on every phone; WebM when this browser can't make MP4
+        const mime = ['video/mp4;codecs=avc1.42E01F,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
             .find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
         if (!mime || !HTMLCanvasElement.prototype.captureStream) throw new Error('unsupported');
         const v = document.createElement('video');
@@ -2288,7 +2308,6 @@ RemminStore.ready.then(() => {
     // fast: decode the whole file, encode it to Opus with WebCodecs (much faster than playing it)
     async function compressAudioFast(url, targetBytes, label, fixedBps = 0) {
         if (!window.AudioEncoder || !window.AudioData || !window.OfflineAudioContext) return null;
-        if (!new Audio().canPlayType('audio/ogg; codecs=opus')) return null;
         const ui = compressProgress(`Compressing ${label}…`, () => {});
         try {
             const raw = await (await fetch(url)).arrayBuffer();
@@ -2297,9 +2316,16 @@ RemminStore.ready.then(() => {
             const dur = decoded.duration || 1;
             let bps = fixedBps || Math.round(Math.max(12000, Math.min(128000, (targetBytes * 8 * 0.9) / dur)));
             const channels = bps < 48000 ? 1 : Math.min(2, decoded.numberOfChannels);
-            const cfg = { codec: 'opus', sampleRate: 48000, numberOfChannels: channels, bitrate: bps };
-            const sup = await AudioEncoder.isConfigSupported(cfg).catch(() => null);
-            if (!sup || !sup.supported) return null;
+            // AAC first (plays on every phone, also iPhones); Opus (.ogg) when this browser can't make AAC
+            let cfg = { codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: channels, bitrate: Math.max(32000, bps), aac: { format: 'adts' } };
+            let sup = await AudioEncoder.isConfigSupported(cfg).catch(() => null);
+            const aac = !!(sup && sup.supported);
+            if (!aac) {
+                if (!new Audio().canPlayType('audio/ogg; codecs=opus')) return null;
+                cfg = { codec: 'opus', sampleRate: 48000, numberOfChannels: channels, bitrate: bps };
+                sup = await AudioEncoder.isConfigSupported(cfg).catch(() => null);
+                if (!sup || !sup.supported) return null;
+            }
             ui.set(0.15, `Compressing ${label}… (reading)`);
             // to 48 kHz (what Opus uses)
             const off = new OfflineAudioContext(channels, Math.ceil(dur * 48000), 48000);
@@ -2331,7 +2357,7 @@ RemminStore.ready.then(() => {
             await enc.flush();
             enc.close();
             if (failed || !packets.length) return null;
-            const out = await blobToDataUrl(oggOpusFile(packets, channels, decoded.sampleRate, 312));
+            const out = await blobToDataUrl(aac ? new Blob(packets.map((pk) => pk.data), { type: 'audio/aac' }) : oggOpusFile(packets, channels, decoded.sampleRate, 312));
             return /^data:audio\//.test(out) ? out : null;
         } catch (_) {
             return null;
@@ -2379,6 +2405,27 @@ RemminStore.ready.then(() => {
         const out = await blobToDataUrl(new Blob(chunks, { type: mime.split(';')[0] }));
         if (!/^data:audio\//.test(out)) throw new Error('failed');
         return out;
+    }
+    // re-record a WebM video as MP4 (about the same quality), everywhere it is used; can be undone
+    async function convertToMp4(ref) {
+        const id = ref.slice(6);
+        const before = state.media[id];
+        if (!before) return;
+        let out;
+        try {
+            const url = await mediaUrl(ref);
+            const dur = await new Promise((res) => { const v = document.createElement('video'); v.preload = 'metadata'; v.onloadedmetadata = () => res(v.duration); v.onerror = () => res(0); v.src = url; });
+            const rate = Number.isFinite(dur) && dur > 0 ? Math.max(500000, Math.min(6000000, (before.length * 0.75 * 8) / dur)) : 2500000;
+            out = await compressVideoUrl(url, { maxH: 1080, bitrate: rate, label: 'video to MP4' });
+        } catch (err) { toast(err && err.message === 'cancelled' ? 'Converting stopped' : 'Could not convert this video'); return; }
+        if (!/^data:video\/mp4/.test(out)) { toast('This browser cannot make MP4 videos (try Chrome or Edge)'); return; }
+        keepOriginal(id, before);
+        state.media[id] = out;
+        scheduleSaveMedia();
+        refreshMediaPlayers(id);
+        markChanged();
+        scheduleGithubSave();
+        toast(`Converted to MP4 (${mbOf(out).toFixed(1)} MB): it now plays on phones too`);
     }
     // compress a video that is already in a note (all its places get the smaller version)
     async function compressMedia(ref, preset) {
@@ -2643,6 +2690,9 @@ RemminStore.ready.then(() => {
                     [{ label: `Compress to … MB${data ? ` (now ${mbOf(data).toFixed(1)} MB)` : ''}`, icon: '✎', run: () => compressMediaTo(src) },
                         ...COMPRESS_PRESETS.map((pr) => ({ label: pr.label, icon: '🗜', run: () => compressMedia(src, pr) }))]), 0)
             });
+            if (data && !/^data:video\/mp4/.test(data) && window.MediaRecorder && MediaRecorder.isTypeSupported('video/mp4')) {
+                items.push({ label: 'Convert to MP4 (plays on every phone)', icon: '📱', run: () => convertToMp4(src) });
+            }
             const orig = state.mediaOrig && state.mediaOrig[src.slice(6)];
             if (orig) {
                 items.push({ label: `Undo compression (back to ${mbOf(orig.data).toFixed(1)} MB)`, icon: '↺', run: () => undoCompression(src) });
@@ -3658,6 +3708,12 @@ RemminStore.ready.then(() => {
         const video = e.target.closest('.video-embed');
         if (video && editorEl.contains(video) && e.target.tagName !== 'VIDEO' && !e.target.closest('.ve-handle')) {
             if (Date.now() - videoMovedAt < 400) return;
+            // already the only one selected: a second click / tap opens its options (handy on phones)
+            if (!e.shiftKey && textMediaSel.length === 1 && textMediaSel[0] === video) {
+                const r = video.getBoundingClientRect();
+                menuAt(Math.min(e.clientX, r.right), e.clientY, 'Video', textVideoActions(video));
+                return;
+            }
             if (!e.shiftKey) selectImage(null);
             selectTextMedia(video, e.shiftKey);
             return;
@@ -4007,11 +4063,24 @@ RemminStore.ready.then(() => {
         if (!root || !root.querySelectorAll) return;
         const list = root.matches && root.matches('video[data-media]') ? [root] : root.querySelectorAll('video[data-media]');
         list.forEach((v) => {
+            if (!v.dataset.errWatch) {
+                v.dataset.errWatch = '1';
+                v.addEventListener('error', () => showUnplayable(v));
+            }
             if (v.getAttribute('src')) return;
             const ref = v.getAttribute('data-media');
             mediaUrl(ref).then((url) => { if (!v.getAttribute('src')) v.src = url; })
                 .catch(() => { v.classList.add('missing'); v.title = 'This video is not on this device yet (sync to get it)'; });
         });
+    }
+    function showUnplayable(v) {
+        if (!v.getAttribute('src') || (v.nextElementSibling && v.nextElementSibling.classList.contains('video-error'))) return;
+        const fmt = (/^data:video\/([\w.+-]+)/.exec(mediaData(v.getAttribute('data-media')) || '') || [])[1] || 'this';
+        const msg = document.createElement('div');
+        msg.className = 'video-error';
+        msg.contentEditable = 'false';
+        msg.textContent = `This device cannot play ${fmt.toUpperCase()} videos. On a computer: right-click the video → "Convert to MP4", then it plays everywhere.`;
+        v.insertAdjacentElement('afterend', msg);
     }
     new MutationObserver((list) => {
         list.forEach((m) => m.addedNodes.forEach((n) => { if (n.nodeType === 1) hydrateLocalVideos(n); }));
@@ -11268,6 +11337,7 @@ RemminStore.ready.then(() => {
         state.prefs.sidebarSide = state.prefs.sidebarSide === 'left' ? 'right' : 'left';
         savePrefs();
         applyLayout();
+        if (typeof applyHubs === 'function') applyHubs();
     }
 
     $('toggleSidebarSide').addEventListener('click', toggleSidebarSide);
@@ -11505,8 +11575,9 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
-    const APP_BUILD = '2026-11-19.3';
+    const APP_BUILD = '2026-11-20.1';
     const PATCH_HISTORY = [
+        'Videos play on phones (Convert to MP4 for WebM); Hubs bar can collapse and shows on phones; hubs renamed',
         'GitHub sync: videos / audio as separate files (no more "file is too large"), only new media is uploaded',
         'Sync fix: no more endless fetching / pushing (stale GitHub reads, too-big files, older Remmin on another device)',
         'The note you had open last opens again when you come back',
@@ -13177,6 +13248,18 @@ RemminStore.ready.then(() => {
     RemminStore.onChange(updateStorageMeters);
 
     /* ---- Hubs bar: for now only shows the hubs (what each one does comes later) ---- */
+    function applyHubs() {
+        const collapsed = !!state.prefs.hubsCollapsed;
+        app.classList.toggle('hubs-collapsed', collapsed);
+        const left = state.prefs.sidebarSide === 'right'; // the hubs are on the other side than the Explorer
+        $('expandHubs').hidden = !collapsed;
+        $('expandHubs').classList.toggle('left', left);
+        $('expandHubs').textContent = String.fromCharCode(left ? 8250 : 8249);
+        $('collapseHubs').textContent = String.fromCharCode(left ? 8249 : 8250);
+    }
+    $('collapseHubs').addEventListener('click', () => { state.prefs.hubsCollapsed = true; savePrefs(); applyHubs(); fitCanvas(); });
+    $('expandHubs').addEventListener('click', () => { state.prefs.hubsCollapsed = false; savePrefs(); applyHubs(); fitCanvas(); });
+    applyHubs();
     (() => {
         const bar = $('hubsBar');
         if (!bar) return;
@@ -13193,12 +13276,13 @@ RemminStore.ready.then(() => {
             tip.style.top = `${r.top + r.height / 2}px`;
             tip.style.left = onRight ? `${r.left - tip.offsetWidth - 12}px` : `${r.right + 12}px`;
         };
-        bar.addEventListener('mouseover', (e) => { const b = e.target.closest('.hub-btn'); if (b) showTip(b); });
-        bar.addEventListener('mouseout', (e) => { if (!e.relatedTarget || !bar.contains(e.relatedTarget) || !e.relatedTarget.closest('.hub-btn')) tip.hidden = true; });
+        bar.addEventListener('mouseover', (e) => { const b = e.target.closest('.hub-btn'); if (b && !isMobile()) showTip(b); });
+        bar.addEventListener('mouseout', (e) => { if (isMobile()) return; if (!e.relatedTarget || !bar.contains(e.relatedTarget) || !e.relatedTarget.closest('.hub-btn')) tip.hidden = true; });
         bar.addEventListener('click', (e) => {
             const b = e.target.closest('.hub-btn');
             if (!b) return;
             bar.querySelectorAll('.hub-btn').forEach((x) => x.classList.toggle('active', x === b));
+            if (isMobile()) { showTip(b); clearTimeout(bar.tipTimer); bar.tipTimer = setTimeout(() => { tip.hidden = true; }, 1600); } // on a phone: the name for a moment
         });
     })();
 

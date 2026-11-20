@@ -2155,7 +2155,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 
 /* videos in the text */
 .video-embed { position: relative; margin: 6px 0; max-width: 720px; padding-top: 22px; border-radius: 8px; background: rgba(255, 255, 255, .04); border: 1px solid var(--border); cursor: pointer; user-select: none; }
-.video-embed::before { content: '▶ Video · click here for options'; position: absolute; left: 8px; top: 3px; font-size: 11px; color: var(--text-dim); }
+.video-embed::before { content: '▶ Video · click to select, again (or right-click) for options'; position: absolute; left: 8px; top: 3px; font-size: 11px; color: var(--text-dim); }
 .video-embed iframe { display: block; width: 100%; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: 0 0 8px 8px; }
 /* videos on the Collage board */
 .cb-video { background: #000; border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 14px rgba(0, 0, 0, .4); }
@@ -2378,4 +2378,27 @@ video.draw-video-full { position: fixed; left: -10000px; top: 0; width: 10px; he
 .hub-tip[hidden] { display: none; }
 .hub-tip::after { content: ''; position: absolute; top: 50%; right: -5px; transform: translateY(-50%); border: 5px solid transparent; border-right: 0; border-left-color: #111214; }
 .hub-tip.right::after { right: auto; left: -5px; border: 5px solid transparent; border-left: 0; border-right-color: #111214; }
-@media (max-width: 760px) { .hubs-bar { display: none; } }
+/* collapse / expand the hubs */
+.hub-collapse { width: 28px; height: 22px; flex-shrink: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 16px; line-height: 1; }
+.hub-collapse:hover { background: rgba(255, 255, 255, .08); color: var(--text); }
+.app.hubs-collapsed { --hubs-width: 0px; }
+.app.hubs-collapsed .hubs-bar { display: none; }
+.expand-hubs { position: fixed; top: calc(50% + 52px); right: 8px; transform: translateY(-50%); z-index: 20; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 10px 6px; cursor: pointer; }
+.expand-hubs.left { right: auto; left: 8px; }
+.expand-hubs:hover { border-color: var(--primary); }
+.expand-hubs[hidden] { display: none; }
+/* a video this device can't play */
+.video-error { padding: 8px 10px; font-size: 12px; line-height: 1.4; color: #fbbf24; background: rgba(0, 0, 0, .55); border-radius: 0 0 8px 8px; }
+/* phones: a thin hubs bar on the other side than the Explorer, the page makes room for it */
+@media (max-width: 760px) {
+    .app:not(.hubs-collapsed) .hubs-bar {
+        display: flex; position: fixed; top: 0; bottom: 0; right: 0; width: 56px; padding: 10px 0; gap: 6px; z-index: 40;
+    }
+    .app.sidebar-right:not(.hubs-collapsed) .hubs-bar { right: auto; left: 0; }
+    .app:not(.hubs-collapsed) .main { margin-right: 56px; }
+    .app.sidebar-right:not(.hubs-collapsed) .main { margin-right: 0; margin-left: 56px; }
+    .hubs-bar .hub-btn { width: 40px; height: 40px; font-size: 17px; }
+    .hubs-bar .hub-btn::before { right: -8px; }
+    .sidebar-right .hubs-bar .hub-btn::before { left: -8px; }
+    .expand-hubs { top: auto; bottom: 90px; transform: none; padding: 12px 7px; }
+}

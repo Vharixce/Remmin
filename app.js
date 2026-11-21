@@ -8705,7 +8705,7 @@ RemminStore.ready.then(() => {
         }
         const have = new Set(f.card[field] || []);
         showMenu(anchor, kind === 'dept' ? 'Department' : 'Assign', list.map((x) => ({
-            label: `${have.has(x.id) ? '✓ ' : ''}${x.name}`,
+            label: `${kind === 'dept' && have.has(x.id) ? '✓ ' : ''}${x.name}`,
             icon: kind === 'dept' ? `<span class="pj-dot small" style="background:${escapeHtml(x.color)}"></span>` : (have.has(x.id) ? '✓' : ''),
             run: () => {
                 const g = pjFindCard(cardId);
@@ -8724,8 +8724,17 @@ RemminStore.ready.then(() => {
                 });
                 renderProject();           // an item being typed in stays open (and keeps its text)
                 if (!editing) pjSave();
+                // the little window stays open, so you can pick several (click outside or Done to close)
+                setTimeout(() => {
+                    const cardEl = $('pjColumns').querySelector(`.pj-card[data-card="${cardId}"]`);
+                    const btn = cardEl && cardEl.querySelector(kind === 'dept' ? '.pj-assign-dept' : '.pj-assign-person');
+                    if (btn) { cardEl.classList.add('pj-menu-open'); pjAssignMenu(btn, cardId, kind); }
+                }, 0);
             }
-        })));
+        })).concat([{ label: 'Done', icon: '✓', run: () => {
+            const cardEl = $('pjColumns').querySelector(`.pj-card[data-card="${cardId}"]`);
+            if (cardEl) cardEl.classList.remove('pj-menu-open');
+        } }]));
     }
     function pjAddSide(kind) {
         const input = $(kind === 'dept' ? 'pjDeptInput' : 'pjPersonInput');
@@ -8786,6 +8795,66 @@ RemminStore.ready.then(() => {
             })));
         }
     });
+    /* drag a department / person from the lists on the right onto an item (onto a selected item: all selected ones get it) */
+    let pjTagDrag = null;
+    $('pjSide').addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        const row = e.target.closest('.pj-side-item');
+        if (!row || e.target.closest('button, input')) return;
+        const kind = row.dataset.dept ? 'dept' : 'person';
+        const id = row.dataset.dept || row.dataset.person;
+        pjTagDrag = { kind, id, row, x0: e.clientX, y0: e.clientY, ghost: null, over: null, pointerId: e.pointerId };
+    });
+    document.addEventListener('pointermove', (e) => {
+        const d = pjTagDrag;
+        if (!d || e.pointerId !== d.pointerId) return;
+        if (!d.ghost) {
+            if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6) return;
+            const item = d.kind === 'dept' ? pjDept(d.id) : pj.people.find((x) => x.id === d.id);
+            if (!item) { pjTagDrag = null; return; }
+            d.ghost = document.createElement('div');
+            d.ghost.className = 'pj-tag-ghost';
+            d.ghost.innerHTML = d.kind === 'dept'
+                ? `<span class="pj-dot small" style="background:${escapeHtml(item.color)}"></span>${escapeHtml(item.name)}`
+                : `<span class="pj-avatar">${escapeHtml(initials(item.name))}</span>${escapeHtml(item.name)}`;
+            document.body.appendChild(d.ghost);
+            document.body.classList.add('pj-tag-dragging');
+            window.getSelection()?.removeAllRanges();
+        }
+        e.preventDefault();
+        d.ghost.style.left = `${e.clientX + 12}px`;
+        d.ghost.style.top = `${e.clientY + 10}px`;
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const card = el && el.closest && el.closest('#pjColumns .pj-card');
+        if (d.over !== card) {
+            if (d.over) d.over.classList.remove('pj-tag-target');
+            d.over = card || null;
+            if (card) card.classList.add('pj-tag-target');
+        }
+    }, { passive: false });
+    const pjTagDrop = (e) => {
+        const d = pjTagDrag;
+        if (!d || (e && e.pointerId !== d.pointerId)) return;
+        pjTagDrag = null;
+        if (!d.ghost) return; // a plain click
+        d.ghost.remove();
+        document.body.classList.remove('pj-tag-dragging');
+        const card = d.over;
+        if (card) card.classList.remove('pj-tag-target');
+        if (!card || !e || e.type === 'pointercancel') return;
+        const cardId = card.dataset.card;
+        const field = d.kind === 'dept' ? 'depts' : 'people';
+        const editing = pj.editing && pj.editing.kind === 'card' && pj.editing.id === cardId;
+        const ids = !editing && pj.sel.has(cardId) && pj.sel.size > 1 ? [...pj.sel] : [cardId];
+        const missing = ids.filter((cid) => { const h = pjFindCard(cid); return h && !(h.card[field] || []).includes(d.id); });
+        if (!missing.length) { toast(ids.length > 1 ? 'These items already have it' : 'This item already has it'); return; }
+        if (!editing) pjRecord();
+        missing.forEach((cid) => { const h = pjFindCard(cid); h.card[field] = [...(h.card[field] || []), d.id]; });
+        renderProject();
+        if (!editing) pjSave();
+    };
+    document.addEventListener('pointerup', pjTagDrop);
+    document.addEventListener('pointercancel', pjTagDrop);
     $('pjSide').addEventListener('dblclick', (e) => {
         const row = e.target.closest('.pj-side-item');
         if (row && e.target.closest('.pj-side-name') && pjActive()) pjRenameSide(row.dataset.dept ? 'dept' : 'person', row.dataset.dept || row.dataset.person);
@@ -11644,6 +11713,8 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-20.1';
     const PATCH_HISTORY = [
+        'Project: the Department / Assign windows stay open, so you can pick several',
+        'Project: drag a department or person onto an item to give it to that item',
         'Project: an open eye now shows ONLY the items of that department / person',
         'New notes start empty: add Text, Collage, Draw or Project windows with the + button',
         'Videos play on phones (Convert to MP4 for WebM); Hubs bar can collapse and shows on phones; hubs renamed',

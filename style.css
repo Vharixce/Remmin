@@ -2118,7 +2118,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .pj-card-foot:not(:has(.pj-chip, .pj-avatar)) { margin-top: 2px; }
 .pj-chip { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 9px; white-space: nowrap; }
 .pj-assign { margin-left: auto; display: inline-flex; gap: 2px; opacity: 0; }
-.pj-card:hover .pj-assign, .pj-card.editing .pj-assign { opacity: 1; }
+.pj-card:hover .pj-assign, .pj-card.editing .pj-assign, .pj-card .pj-assign:has(.open) { opacity: 1; }
 @media (hover: none) { .pj-assign { opacity: .7; } }
 .pj-assign button { background: none; border: 0; cursor: pointer; font-size: 12px; padding: 1px 4px; border-radius: 4px; filter: grayscale(.4); }
 .pj-assign button:hover { background: rgba(255, 255, 255, .08); filter: none; }
@@ -2416,3 +2416,12 @@ video.draw-video-full { position: fixed; left: -10000px; top: 0; width: 10px; he
 .nw-btn { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 110px; padding: 16px 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
 .nw-btn span { font-size: 26px; }
 .nw-btn:hover { border-color: var(--primary); background: rgba(124, 111, 240, .12); }
+
+/* Project: dragging a department / person onto an item */
+.pj-side-item { cursor: grab; }
+.pj-side-item button { cursor: pointer; }
+body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user-select: none; }
+.pj-tag-ghost { position: fixed; z-index: 3000; pointer-events: none; display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; background: var(--card); border: 1px solid var(--primary); box-shadow: 0 6px 18px rgba(0, 0, 0, .45); font-size: 13px; white-space: nowrap; }
+.pj-tag-ghost .pj-avatar { width: 18px; height: 18px; font-size: 9px; }
+.pj-card.pj-tag-target { outline: 2px dashed var(--primary); outline-offset: 2px; background: rgba(124, 111, 240, .12); }
+.pj-side-item { touch-action: none; }

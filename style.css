@@ -2425,3 +2425,7 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .pj-tag-ghost .pj-avatar { width: 18px; height: 18px; font-size: 9px; }
 .pj-card.pj-tag-target { outline: 2px dashed var(--primary); outline-offset: 2px; background: rgba(124, 111, 240, .12); }
 .pj-side-item { touch-action: none; }
+
+/* the hub logos */
+.hub-btn .hub-icon { width: 26px; height: 26px; display: block; pointer-events: none; }
+@media (max-width: 760px) { .hub-btn .hub-icon { width: 22px; height: 22px; } }

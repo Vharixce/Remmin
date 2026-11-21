@@ -8594,21 +8594,22 @@ RemminStore.ready.then(() => {
         pj.columns = Array.isArray(saved.columns) ? saved.columns : pjDefault();
         pj.people = Array.isArray(saved.people) ? saved.people : [];
         pj.departments = Array.isArray(saved.departments) ? saved.departments : [];
-        pj.hidden = saved.hidden && typeof saved.hidden === 'object' ? { depts: saved.hidden.depts || [], people: saved.hidden.people || [] } : { depts: [], people: [] };
+        // the open eyes: only the items with these departments / people are shown (none open: everything)
+        pj.filter = saved.filter && typeof saved.filter === 'object' ? { depts: saved.filter.depts || [], people: saved.filter.people || [] } : { depts: [], people: [] };
         pj.undo = []; pj.redo = []; pj.editing = null; pj.sel = new Set();
         renderProject();
     }
     function pjSave() {
         const note = noteById(pj.noteId);
         if (!note || isPrivateLocked(note)) return;
-        note.project = JSON.parse(JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments, hidden: pj.hidden }));
+        note.project = JSON.parse(JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments, filter: pj.filter }));
         touch(note);
     }
-    const pjState = () => JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments, hidden: pj.hidden });
+    const pjState = () => JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments, filter: pj.filter });
     function pjRestore(text) {
         const v = JSON.parse(text);
         pj.columns = v.columns; pj.people = v.people || []; pj.departments = v.departments || [];
-        pj.hidden = v.hidden || { depts: [], people: [] };
+        pj.filter = v.filter || { depts: [], people: [] };
     }
     function pjRecord() {
         pj.undo.push(pjState());
@@ -8666,10 +8667,12 @@ RemminStore.ready.then(() => {
     // the eye: hide / show all items with this department or person
     const EYE = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
     const EYE_OFF = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/></svg>';
-    const pjHiddenDept = (id) => (pj.hidden.depts || []).includes(id);
-    const pjHiddenPerson = (id) => (pj.hidden.people || []).includes(id);
-    const pjShown = (card) => !(card.depts || []).some(pjHiddenDept) && !(card.people || []).some(pjHiddenPerson);
-    const eyeBtn = (hidden, name) => `<button type="button" class="pj-eye${hidden ? ' off' : ''}" title="${hidden ? 'Show' : 'Hide'} the items of ${escapeHtml(name)}" aria-pressed="${hidden}">${hidden ? EYE_OFF : EYE}</button>`;
+    // an open eye = a filter: only the items with that department / person (several open: items with any of them)
+    const pjFilterDept = (id) => (pj.filter.depts || []).includes(id);
+    const pjFilterPerson = (id) => (pj.filter.people || []).includes(id);
+    const pjFiltering = () => !!((pj.filter.depts || []).length || (pj.filter.people || []).length);
+    const pjShown = (card) => !pjFiltering() || (card.depts || []).some(pjFilterDept) || (card.people || []).some(pjFilterPerson);
+    const eyeBtn = (open, name) => `<button type="button" class="pj-eye${open ? ' on' : ''}" title="${open ? 'Stop showing only' : 'Show only'} the items of ${escapeHtml(name)}" aria-pressed="${open}">${open ? EYE : EYE_OFF}</button>`;
 
     // the small lists on the right: departments (with a colour) and people
     function renderProjectSide() {
@@ -8677,14 +8680,14 @@ RemminStore.ready.then(() => {
             <div class="pj-side-item" data-dept="${d.id}">
                 <button type="button" class="pj-dot" style="background:${escapeHtml(d.color)}" title="Change colour"></button>
                 <span class="pj-side-name" title="Double-click to rename">${escapeHtml(d.name)}</span>
-                ${eyeBtn(pjHiddenDept(d.id), d.name)}
+                ${eyeBtn(pjFilterDept(d.id), d.name)}
                 <button type="button" class="pj-side-del" title="Remove">✕</button>
             </div>`).join('') : '<div class="pj-side-empty">e.g. Art department</div>';
         $('pjPeopleList').innerHTML = pj.people.length ? pj.people.map((p) => `
             <div class="pj-side-item" data-person="${p.id}">
                 <span class="pj-avatar">${escapeHtml(initials(p.name))}</span>
                 <span class="pj-side-name" title="Double-click to rename">${escapeHtml(p.name)}</span>
-                ${eyeBtn(pjHiddenPerson(p.id), p.name)}
+                ${eyeBtn(pjFilterPerson(p.id), p.name)}
                 <button type="button" class="pj-side-del" title="Remove">✕</button>
             </div>`).join('') : '<div class="pj-side-empty">Add the people who work on this</div>';
     }
@@ -8767,9 +8770,9 @@ RemminStore.ready.then(() => {
         if (e.target.closest('.pj-eye')) {
             if (pj.editing && pj.editFinish) pj.editFinish(true);
             const key = kind === 'dept' ? 'depts' : 'people';
-            const list = new Set(pj.hidden[key] || []);
+            const list = new Set(pj.filter[key] || []);
             if (list.has(id)) list.delete(id); else list.add(id);
-            pj.hidden = { ...pj.hidden, [key]: [...list] };
+            pj.filter = { ...pj.filter, [key]: [...list] };
             pj.sel = new Set();
             renderProject();
             pjSave();
@@ -11641,6 +11644,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-20.1';
     const PATCH_HISTORY = [
+        'Project: an open eye now shows ONLY the items of that department / person',
         'New notes start empty: add Text, Collage, Draw or Project windows with the + button',
         'Videos play on phones (Convert to MP4 for WebM); Hubs bar can collapse and shows on phones; hubs renamed',
         'GitHub sync: videos / audio as separate files (no more "file is too large"), only new media is uploaded',

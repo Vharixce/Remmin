@@ -2247,8 +2247,9 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 /* Project: eye to hide / show the items of a department or person */
 .pj-eye { background: none; border: 0; color: var(--text-dim); cursor: pointer; padding: 2px 3px; border-radius: 4px; display: inline-flex; align-items: center; }
 .pj-eye:hover { color: var(--text); background: rgba(255, 255, 255, .08); }
-.pj-eye.off { color: #f59e0b; }
-.pj-side-item:has(.pj-eye.off) .pj-side-name { opacity: .5; text-decoration: line-through; }
+.pj-eye { opacity: .55; }
+.pj-eye.on { color: #22c55e; opacity: 1; }
+.pj-side-item:has(.pj-eye.on) .pj-side-name { font-weight: 600; }
 
 /* popup when the broadcast is clicked */
 .broadcast { cursor: pointer; }

@@ -1969,11 +1969,11 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .cb-item { position: absolute; box-sizing: border-box; }
 .cb-sticky {
     padding: 14px; border-radius: 3px; box-shadow: 0 4px 12px rgba(0, 0, 0, .35);
-    font-size: 16px; line-height: 1.35; overflow: hidden; overflow-wrap: anywhere;
+    font-size: 19px; line-height: 1.35; overflow: hidden; overflow-wrap: anywhere;
 }
 .cb-text { min-height: 1.35em; outline: none; }
 .cb-sticky .cb-text { height: 100%; }
-.cb-textbox { width: max-content; min-width: 40px; padding: 4px 6px; font-size: 18px; line-height: 1.35; color: var(--text); min-height: 32px; overflow-wrap: anywhere; }
+.cb-textbox { width: max-content; min-width: 40px; padding: 4px 6px; font-size: 22px; line-height: 1.35; color: var(--text); min-height: 32px; overflow-wrap: anywhere; }
 .cb-textbox > .cb-text { min-height: 24px; }
 .cb-item .cb-text h1, .cb-item .cb-text h2, .cb-item .cb-text h3 { font-size: 1.6em; line-height: 1.2; margin: .1em 0; }
 .cb-item .cb-text ul, .cb-item .cb-text ol { margin: 0; padding-left: 1.3em; }

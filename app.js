@@ -11713,6 +11713,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-20.1';
     const PATCH_HISTORY = [
+        'Collage: bigger standard text (about 120%)',
         'Authoritarian Hub logo: a podium with press microphones',
         'New logos for the hubs (garden, microphone, anarchy A, two profiles)',
         'Project: the Department / Assign windows stay open, so you can pick several',

@@ -11713,6 +11713,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-20.1';
     const PATCH_HISTORY = [
+        'Hub logos fade smoothly between normal and hover (0.25 s)',
         'Hubs: your own logos; Community Hub instead of the Authoritarian and Anarchy hubs',
         'Collage: bigger standard text (about 120%)',
         'Authoritarian Hub logo: a podium with press microphones',

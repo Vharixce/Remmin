@@ -2539,9 +2539,11 @@ RemminStore.ready.then(() => {
         }
         return null;
     }
+    let lastClip = null; // what Remmin copied last (the Paste button can't read Remmin's own clipboard type)
     function writeClipItems(e, items, plain = ITEMS_MARK) {
         const list = items.map(cleanClipItem).filter(Boolean);
         if (!list.length || !e.clipboardData) return false;
+        lastClip = { list, plain };
         e.clipboardData.setData(ITEMS_TYPE, JSON.stringify(list));
         const pics = list.filter((it) => it.kind === 'image');
         if (pics.length) e.clipboardData.setData('text/html', pics.map((it) => `<img src="${it.src.replace(/"/g, '&quot;')}">`).join(''));
@@ -2587,18 +2589,90 @@ RemminStore.ready.then(() => {
 
     // copy a picture so it can be pasted in Text, Collage or Draw
     const PIC_MARK = 'remmin-picture-copy';
-    function copyPictureSrc(src) {
-        const onCopy = (e) => {
-            e.clipboardData.setData('text/html', `<img src="${src.replace(/"/g, '&quot;')}">`);
-            e.clipboardData.setData('text/plain', PIC_MARK);
-            e.preventDefault();
-            e.stopImmediatePropagation();
+    const picCopyHtml = (src) => `<img data-remmin-pic="1" src="${src.replace(/"/g, '&quot;')}">`;
+    // the picture as a PNG (what Paint, Discord, Word… understand)
+    async function pictureToPng(src) {
+        const img = new Image();
+        img.src = src;
+        await img.decode();
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth || 1;
+        c.height = img.naturalHeight || 1;
+        c.getContext('2d').drawImage(img, 0, 0);
+        return new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('png'))), 'image/png'));
+    }
+    // copy a picture: Remmin pastes the picture itself (no second copy is stored); other apps get the real picture
+    function copyPictureSrc(src, quiet = false) {
+        const old = () => {
+            const onCopy = (e) => {
+                e.clipboardData.setData('text/html', picCopyHtml(src));
+                e.clipboardData.setData('text/plain', PIC_MARK);
+                e.preventDefault();
+                e.stopImmediatePropagation();
+            };
+            document.addEventListener('copy', onCopy, true);
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+            document.removeEventListener('copy', onCopy, true);
+            if (!quiet) toast(ok ? 'Picture copied: paste it (Ctrl+V) in Text, Collage or Draw' : 'Could not copy the picture');
         };
-        document.addEventListener('copy', onCopy, true);
-        let ok = false;
-        try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
-        document.removeEventListener('copy', onCopy, true);
-        toast(ok ? 'Picture copied: paste it (Ctrl+V) in Text, Collage or Draw' : 'Could not copy the picture');
+        if (!(window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) || !/^data:image\//.test(src)) { if (!quiet) old(); return; }
+        navigator.clipboard.write([new ClipboardItem({
+            'image/png': pictureToPng(src),
+            'text/html': new Blob([picCopyHtml(src)], { type: 'text/html' })
+        })]).then(() => { if (!quiet) toast('Picture copied: paste it in Text, Collage or Draw, or in another app (Paint, Discord…)'); },
+            () => { if (!quiet) old(); });
+    }
+    /* ---- the Paste button: reads the clipboard and pastes it like Ctrl+V (phones have no Ctrl+V) ---- */
+    async function clipboardAsTransfer() {
+        const dt = new DataTransfer();
+        let got = false;
+        try {
+            for (const item of await navigator.clipboard.read()) {
+                for (const type of item.types) {
+                    const blob = await item.getType(type);
+                    if (type === 'text/plain' || type === 'text/html') { dt.setData(type, await blob.text()); got = true; }
+                    else if (/^(image|audio|video)\//.test(type)) { dt.items.add(new File([blob], `pasted.${type.split('/')[1].replace('jpeg', 'jpg')}`, { type })); got = true; }
+                }
+            }
+        } catch (err) {
+            try { const t = await navigator.clipboard.readText(); if (t) { dt.setData('text/plain', t); got = true; } } catch (_) { /* not allowed */ }
+        }
+        if (!got) return null;
+        if (lastClip && dt.getData('text/plain') === lastClip.plain) dt.setData(ITEMS_TYPE, JSON.stringify(lastClip.list));
+        return dt;
+    }
+    async function pasteButton() {
+        const mode = state.prefs.mode;
+        if (!noteById(state.currentNoteId) || isPrivateLocked(noteById(state.currentNoteId))) return;
+        const sel = window.getSelection();
+        const range = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+        if (!navigator.clipboard) { toast('This browser does not let websites read the clipboard: use Ctrl+V'); return; }
+        const dt = await clipboardAsTransfer();
+        if (!dt) { toast('Nothing to paste (or the browser did not allow reading the clipboard)'); return; }
+        let target = document.body;
+        if (mode === 'text') {
+            editorEl.focus({ preventScroll: true });
+            if (range && editorEl.contains(range.startContainer)) { sel.removeAllRanges(); sel.addRange(range); }
+            target = editorEl;
+        } else if (mode === 'collage' && cb.editing) {
+            const el = cbEls.get(cb.editing);
+            const t = el && el.querySelector('.cb-text');
+            if (t) { t.focus({ preventScroll: true }); if (range && t.contains(range.startContainer)) { sel.removeAllRanges(); sel.addRange(range); } target = t; }
+        }
+        const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+        if (!ev.clipboardData) Object.defineProperty(ev, 'clipboardData', { value: dt });
+        target.dispatchEvent(ev);
+        // plain text that nobody handled: type it in
+        const text = dt.getData('text/plain');
+        if (!ev.defaultPrevented && text && target !== document.body) document.execCommand('insertText', false, text);
+    }
+    // a picture copied with Remmin's Copy (it also carries a PNG: use the original picture instead)
+    function ownPictureCopy(e) {
+        const dt = e.clipboardData;
+        if (!dt) return [];
+        const html = dt.getData('text/html');
+        return /data-remmin-pic=/.test(html || '') || dt.getData('text/plain') === PIC_MARK ? pastedPictureSrcs(html) : [];
     }
     // all data: pictures in pasted html
     const pastedPictureSrcs = (html) => [...String(html || '').matchAll(/<img[^>]+src="(data:image\/[^"]+)"/gi)].map((m) => m[1].replace(/&quot;/g, '"'));
@@ -3541,6 +3615,7 @@ RemminStore.ready.then(() => {
         if (!items.length) return;
         e.preventDefault();
         writeClipItems(e, items);
+        if (items.length === 1 && items[0].kind === 'image') setTimeout(() => copyPictureSrc(items[0].src, true), 0);
         if (type === 'cut') {
             recordText();
             [...selectedImgs, ...textMediaSel].forEach((x) => x.remove());
@@ -3567,6 +3642,8 @@ RemminStore.ready.then(() => {
         const pastedText = dt.getData('text/plain');
         const pastedVideo = !dt.files.length && pastedText && !/\s/.test(pastedText.trim()) && videoEmbedUrl(pastedText);
         if (pastedVideo) { e.preventDefault(); insertVideoInText(pastedVideo); return; }
+        const ownPics = ownPictureCopy(e);
+        if (ownPics.length) { e.preventDefault(); insertImageFiles(ownPics); return; }
         const files = [...dt.files].filter((f) => f.type.startsWith('image/'));
         const audio = [...dt.files].filter((f) => f.type.startsWith('audio/'));
         if (files.length || audio.length) {
@@ -3894,7 +3971,7 @@ RemminStore.ready.then(() => {
     });
     $('textToolbar').addEventListener('click', (e) => {
         const b = e.target.closest('button');
-        if (b && b.id !== 'textUndo' && b.id !== 'textRedo' && !b.classList.contains('ctx-act') && b.id !== 'textAddBtn') recordText();
+        if (b && b.id !== 'textUndo' && b.id !== 'textRedo' && !b.classList.contains('ctx-act') && b.id !== 'textAddBtn' && b.id !== 'textPasteBtn') recordText();
     }, true);
     $('textUndo').addEventListener('click', undoText);
     $('textRedo').addEventListener('click', redoText);
@@ -4223,8 +4300,28 @@ RemminStore.ready.then(() => {
     new MutationObserver((list) => {
         list.forEach((m) => m.addedNodes.forEach((n) => { if (n.nodeType === 1) hydrateLocalVideos(n); }));
     }).observe(document.body, { childList: true, subtree: true });
+    // let the user choose files (resolves [] when nothing was chosen)
+    function pickFiles(accept, multiple = true) {
+        return new Promise((resolve) => {
+            const inp = document.createElement('input');
+            inp.type = 'file';
+            inp.accept = accept;
+            inp.multiple = multiple;
+            inp.hidden = true;
+            const done = (files) => { resolve(files); inp.remove(); };
+            inp.addEventListener('change', () => done([...(inp.files || [])]));
+            inp.addEventListener('cancel', () => done([]));
+            document.body.appendChild(inp);
+            inp.click();
+        });
+    }
+    // a YouTube / Vimeo link (a string), or { files } when video files were chosen
     async function askVideoUrl() {
-        const url = await askDialog({ title: 'Embed a video', message: 'Paste a YouTube or Vimeo link.', input: '', okLabel: 'Embed' });
+        const url = await askDialog({ title: 'Add a video', message: 'Paste a YouTube or Vimeo link, or upload a video file.', input: '', okLabel: 'Embed link', altLabel: 'Upload video file' });
+        if (url === 'alt') {
+            const files = (await pickFiles('video/*')).filter(isVideoFile);
+            return files.length ? { files } : null;
+        }
         if (!url) return null;
         const src = videoEmbedUrl(url);
         if (!src) toast('That is not a YouTube or Vimeo link');
@@ -4243,7 +4340,8 @@ RemminStore.ready.then(() => {
         if (!noteById(state.currentNoteId)) return;
         const at = caretPoint();
         const src = await askVideoUrl();
-        if (src) insertVideoInText(src, at);
+        if (src && src.files) readVideoFiles(src.files).then((srcs) => srcs.forEach((s) => insertVideoInText(s, at)));
+        else if (src) insertVideoInText(src, at);
     });
 
     /* ---------------- KLIPY GIFs ----------------
@@ -4272,13 +4370,20 @@ RemminStore.ready.then(() => {
                     <div class="gif-key-row"><input type="text" class="gif-key-input" placeholder="KLIPY API key" autocomplete="off" spellcheck="false"><button type="button" class="btn btn-primary gif-key-save">Save</button></div>
                 </div>
                 <div class="gif-grid"></div>
-                <div class="gif-foot"><span>Powered by <b>KLIPY</b></span><button type="button" class="gif-more" hidden>More</button><button type="button" class="gif-change-key">API key</button></div>
+                <div class="gif-foot"><button type="button" class="btn gif-upload">Upload GIF file</button><span>Powered by <b>KLIPY</b></span><button type="button" class="gif-more" hidden>More</button><button type="button" class="gif-change-key">API key</button></div>
             </div>`;
         document.body.appendChild(el);
         const q = el.querySelector('.gif-search'), grid = el.querySelector('.gif-grid'), keyBox = el.querySelector('.gif-key');
         const more = el.querySelector('.gif-more');
         let page = 1, timer = null, token = 0;
-        const close = () => { el.classList.remove('active'); gifPicker.onPick = null; };
+        const close = () => { el.classList.remove('active'); gifPicker.onPick = null; gifPicker.onFiles = null; };
+        el.querySelector('.gif-upload').addEventListener('click', async () => {
+            const onFiles = gifPicker.onFiles;
+            const files = (await pickFiles('image/gif')).filter((f) => f.type.startsWith('image/'));
+            if (!files.length) return;
+            close();
+            if (onFiles) onFiles(files);
+        });
         const showKey = (on) => { keyBox.hidden = !on; grid.hidden = on; if (on) el.querySelector('.gif-key-input').value = RemminStore.get(KLIPY_KEY) || ''; };
         async function load(reset) {
             const key = (RemminStore.get(KLIPY_KEY) || '').trim();
@@ -4333,9 +4438,10 @@ RemminStore.ready.then(() => {
         el.querySelector('.gif-key-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') el.querySelector('.gif-key-save').click(); });
         return { el, q, load, onPick: null };
     }
-    function openGifPicker(onPick) {
+    function openGifPicker(onPick, onFiles) {
         if (!gifPicker) gifPicker = buildGifPicker();
         gifPicker.onPick = onPick;
+        gifPicker.onFiles = onFiles || null;
         gifPicker.el.classList.add('active');
         gifPicker.q.value = '';
         gifPicker.load(true);
@@ -4361,7 +4467,7 @@ RemminStore.ready.then(() => {
             recordText();
             placeLine(pictureLine(url), at.inline ? { before: at.line && at.line.nextSibling } : at);
             markTextChanged();
-        });
+        }, (files) => insertImageFiles(files, at));
     });
     $('toolGif').addEventListener('click', () => {
         if (!noteById(state.currentNoteId)) return;
@@ -4369,7 +4475,7 @@ RemminStore.ready.then(() => {
             const file = await fetchGifFile(url);
             if (file) addDrawImages([file]);
             else toast('This GIF could not be downloaded, so it can\'t go in a drawing');
-        });
+        }, (files) => addDrawImages(files));
     });
 
     // Download the selected picture (also possible with right-click → Save image as)
@@ -5118,7 +5224,8 @@ RemminStore.ready.then(() => {
 
     $('insertVoiceBtn').addEventListener('click', () => openVoiceModal('text'));
     textCtx = makeCtxBar($('textToolbar'), [$('imageTools')]);
-    addMenu($('textAddBtn'), [['Picture', '🖼', 'insertImageBtn'], ['GIF', '🎞', 'insertGifBtn'], ['Video (YouTube / Vimeo link)', '▶', 'insertVideoEmbedBtn'], ['Audio / voice note', '🎤', 'insertVoiceBtn']]);
+    ['textPasteBtn', 'cbPasteBtn', 'drawPasteBtn'].forEach((id) => $(id).addEventListener('click', pasteButton));
+    addMenu($('textAddBtn'), [['Picture', '🖼', 'insertImageBtn'], ['GIF', '🎞', 'insertGifBtn'], ['Video file / link', '▶', 'insertVideoEmbedBtn'], ['Audio / voice note', '🎤', 'insertVoiceBtn']]);
     $('voiceRecBtn').addEventListener('click', () => {
         if (voice.recorder && voice.recorder.state === 'recording') {
             voice.duration = (Date.now() - voice.startedAt) / 1000;
@@ -7806,6 +7913,7 @@ RemminStore.ready.then(() => {
         if (!drawPickActive() || (state.draw.tool === 'select' && drawPick.length) || !drawSel || !state.draw.strokes.includes(drawSel) || !drawSel.image) return;
         e.preventDefault();
         writeClipItems(e, [drawSel.video ? { kind: 'video', src: drawSel.video, loop: drawSel.loop !== false } : { kind: 'image', src: drawSel.image }]);
+        if (!drawSel.video) { const src = drawSel.image; setTimeout(() => copyPictureSrc(src, true), 0); }
         if (type === 'cut') { pushDrawUndo(); state.draw.strokes = state.draw.strokes.filter((st) => st !== drawSel); drawSel = null; renderStrokes(); flushEditor(); }
         toast(`${drawSel && drawSel.video ? 'Video' : 'Picture'} ${type === 'cut' ? 'cut' : 'copied'}: paste with Ctrl+V in Text, Collage or Draw`);
     }));
@@ -8410,6 +8518,8 @@ RemminStore.ready.then(() => {
         const copiedVid = pastedVideoRef(e);
         if (copiedVid) { e.preventDefault(); addDrawVideoRefs([copiedVid]); return; }
         if (pastedAudio(e)) { e.preventDefault(); toast('Audio can go in Text and Collage (not in a drawing)'); return; }
+        const ownPics = ownPictureCopy(e);
+        if (ownPics.length && !isPrivateLocked(noteById(state.currentNoteId))) { e.preventDefault(); addDrawImages(ownPics); return; }
         const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
         if (!files.length) {
             // pieces copied with the select tool (they also carry a picture: use the real lines instead)
@@ -9681,7 +9791,7 @@ RemminStore.ready.then(() => {
         $('cbUndo').disabled = !cb.undo.length;
         $('cbRedo').disabled = !cb.redo.length;
         const none = !cb.sel.size;
-        ['cbDup', 'cbFront', 'cbBack', 'cbDelete'].forEach((id) => { $(id).disabled = none; });
+        ['cbFront', 'cbBack', 'cbDelete'].forEach((id) => { $(id).disabled = none; });
         updateCbCtx();
     }
     function cbSetTool(tool) {
@@ -9782,7 +9892,7 @@ RemminStore.ready.then(() => {
         const one = items.length === 1 && isMedia(items[0]) ? items[0] : null;
         cbCtx.show({
             key: `${ids.join(',')}|${cb.editing || ''}|${one ? `${!!one.loop}|${(one.src || '').length}|${one.name || ''}` : ''}`,
-            anchor: () => rectOf(ids.map((id) => cbEls.get(id) || cbBoard.querySelector(`[data-arrow="${id}"]`))),
+            anchor: () => rectOf(ids.flatMap((id) => { const el = cbEls.get(id); return el ? [el, el.querySelector(':scope > .cb-frame-title')] : [cbBoard.querySelector(`[data-arrow="${id}"]`)]; })),
             busy: () => !!cbAct && cbPointers.size > 0,
             groups,
             after: updateCbCtx,
@@ -10011,10 +10121,17 @@ RemminStore.ready.then(() => {
             case 'cbImageBtn': $('cbImageFile').click(); break;
             case 'cbGifBtn': {
                 const at = cbViewCenter();
-                openGifPicker(async (url) => { const file = await fetchGifFile(url); cbAddImages([file || url], at); });
+                openGifPicker(async (url) => { const file = await fetchGifFile(url); cbAddImages([file || url], at); }, (files) => cbAddImages(files, at));
                 break;
             }
-            case 'cbVideoBtn': askVideoUrl().then((src) => { if (src) cbAddVideo(src); }); break;
+            case 'cbVideoBtn': {
+                const at = cbViewCenter();
+                askVideoUrl().then((src) => {
+                    if (src && src.files) readVideoFiles(src.files).then((srcs) => srcs.forEach((s, i) => cbAddVideo(s, { x: at.x + i * 30, y: at.y + i * 30 })));
+                    else if (src) cbAddVideo(src);
+                });
+                break;
+            }
             case 'cbAudioBtn': openVoiceModal('collage'); break;
             case 'cbUndo': cbUndoRedo(true); break;
             case 'cbRedo': cbUndoRedo(false); break;
@@ -10031,7 +10148,7 @@ RemminStore.ready.then(() => {
         e.target.value = '';
     });
     cbCtx = makeCtxBar($('collageToolbar'), [$('cbGroupColors'), $('cbGroupFormat'), $('cbGroupArrange')]);
-    addMenu($('cbAddBtn'), [['Picture', '🖼', 'cbImageBtn'], ['GIF', '🎞', 'cbGifBtn'], ['Video (YouTube / Vimeo link)', '▶', 'cbVideoBtn'], ['Audio / voice note', '🎤', 'cbAudioBtn']]);
+    addMenu($('cbAddBtn'), [['Picture', '🖼', 'cbImageBtn'], ['GIF', '🎞', 'cbGifBtn'], ['Video file / link', '▶', 'cbVideoBtn'], ['Audio / voice note', '🎤', 'cbAudioBtn']]);
 
     // colour of the selected sticky notes / frames / arrows / texts (also the colour for new ones)
     function cbColor(color) {
@@ -10568,6 +10685,7 @@ RemminStore.ready.then(() => {
                 : { kind: 'audio', src: it.src, name: it.name, duration: it.duration, loop: !!it.loop, vol: Number.isFinite(it.volume) ? it.volume : 100 }));
         if (media.length) writeClipItems(e, media, CB_MARK);
         e.preventDefault();
+        if (cbClipboard.length === 1 && cbClipboard[0].type === 'image') { const src = cbClipboard[0].src; setTimeout(() => copyPictureSrc(src, true), 0); }
         if (cut) cbDelete();
     }
     document.addEventListener('copy', (e) => cbCopySelection(e, false));
@@ -10584,6 +10702,14 @@ RemminStore.ready.then(() => {
         if (copiedVid) { e.preventDefault(); cbAddVideo(copiedVid); return; }
         const copiedAud = !cb.editing && !cbTypingElsewhere(e) && pastedAudio(e);
         if (copiedAud) { e.preventDefault(); cbAddAudio(copiedAud); return; }
+        const ownPics = !cbTypingElsewhere(e) ? ownPictureCopy(e) : [];
+        if (ownPics.length) {
+            e.preventDefault();
+            // copied on the board itself: paste it like the board does (same size)
+            if (ownPics.length === 1 && cbClipboard && cbClipboard.length === 1 && cbClipboard[0].type === 'image' && cbClipboard[0].src === ownPics[0]) cbPaste(cbClipboard);
+            else cbAddImages(ownPics);
+            return;
+        }
         const audFiles = !cb.editing ? [...(e.clipboardData.files || [])].filter((f) => f.type.startsWith('audio/')) : [];
         if (audFiles.length) { e.preventDefault(); cbAddAudioFiles(audFiles); return; }
         const files = [...(e.clipboardData.files || [])].filter((f) => f.type.startsWith('image/'));
@@ -11955,6 +12081,8 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Paste button in Text, Collage and Draw (handy on a phone); the Duplicate buttons are gone (Ctrl+D still works)',
+        'Copy picture also copies the real picture (paste it in Paint, Discord…); Upload video file / Upload GIF file buttons; the option bar no longer covers a frame name',
         'Simpler note toolbars: click a picture, video, audio, sticky note or frame and its options (and colours) show right above it; Image / GIF / Video / Audio are under one "+ Add" button; Save is a 💾 button',
         'Collage and Draw: hold the right mouse button and scroll to zoom (like Ctrl + scroll); a note without windows only shows the small + button',
         'Phone: the sync text at the bottom of the Explorer is bigger and no longer hidden behind the browser bar',

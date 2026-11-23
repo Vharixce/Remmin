@@ -2452,3 +2452,4 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .tool-btn.add-btn { width: auto; padding: 0 10px; white-space: nowrap; font-weight: 600; }
 .add-src[hidden] { display: none !important; }
 .btn.save-icon-btn { font-size: 17px; line-height: 1; padding-left: 12px; padding-right: 12px; }
+.gif-foot .gif-upload { margin-right: auto; padding: 4px 10px; font-size: 12px; }

@@ -196,6 +196,7 @@
                             <button class="tool-btn" id="toolEraser" title="Eraser">⌫</button>
                             <button class="tool-btn" id="toolFill" title="Bucket: click an area to fill it with the current colour">🪣</button>
                             <button class="tool-btn add-btn" id="drawAddBtn" type="button" title="Add a picture or GIF (or paste / drop one)">+ Add</button>
+                            <button class="tool-btn add-btn paste-btn" id="drawPasteBtn" type="button" title="Paste (Ctrl+V)">📋 Paste</button>
                             <button class="tool-btn add-src" id="toolImage" title="Add a picture or GIF (or paste one with Ctrl+V)" hidden>🖼</button>
                             <button class="tool-btn add-src" id="toolGif" type="button" title="Search GIFs on KLIPY" hidden>GIF</button>
                             <input type="file" id="drawImageFile" accept="image/*" multiple hidden>
@@ -205,7 +206,7 @@
                             <button class="tool-btn mode-grid-btn" id="modeGrid" type="button" title="Grid: colour in cells on a grid (triangles, squares, hexagons, octagons)">▦ Grid</button>
                             <span class="pick-actions" id="pickActions" hidden>
                                 <span class="pick-count" id="pickCount"></span>
-                                <button class="tool-btn pick-btn" id="pickCopy" type="button" title="Make a copy (Ctrl+D)">⧉ Copy</button>
+                                <button class="tool-btn pick-btn" id="pickCopy" type="button" title="Make a copy (Ctrl+D)" hidden>⧉ Copy</button>
                                 <button class="tool-btn pick-btn danger" id="pickDelete" type="button" title="Delete (Delete key)">🗑 Delete</button>
                             </span>
                         </div>
@@ -224,6 +225,7 @@
                             <button class="tool-btn" data-cmd="insertUnorderedList" title="Bullet list (or type “- ” at the start of a line)">&bull; List</button>
                             <button class="tool-btn" data-cmd="insertOrderedList" title="Numbered list (or type “1. ” at the start of a line)">1. List</button>
                             <button class="tool-btn add-btn" id="textAddBtn" type="button" title="Add a picture, GIF, video or audio (you can also paste or drag them in)">+ Add</button>
+                            <button class="tool-btn add-btn paste-btn" id="textPasteBtn" type="button" title="Paste (Ctrl+V)">📋 Paste</button>
                             <button class="tool-btn add-src" id="insertImageBtn" title="Insert image or GIF (you can also paste or drag images in)" hidden>🖼 Image</button>
                             <button class="tool-btn add-src" id="insertGifBtn" type="button" title="Search GIFs on KLIPY" hidden>GIF</button>
                             <button class="tool-btn add-src" id="insertVideoEmbedBtn" type="button" title="Embed a YouTube / Vimeo video (or paste its link)" hidden>▶ Video</button>
@@ -253,6 +255,7 @@
                             <button class="tool-btn" type="button" data-cb-tool="frame" title="Frame (F) – click, or drag to choose its size. Things inside move with it">▭ Frame</button>
                             <button class="tool-btn" type="button" data-cb-tool="arrow" title="Arrow (A) – drag from one thing to another">↗ Arrow</button>
                             <button class="tool-btn add-btn" type="button" id="cbAddBtn" title="Add a picture, GIF, video or audio (you can also paste or drop them on the board)">+ Add</button>
+                            <button class="tool-btn add-btn paste-btn" type="button" id="cbPasteBtn" title="Paste (Ctrl+V)">📋 Paste</button>
                             <button class="tool-btn add-src" type="button" id="cbImageBtn" title="Add pictures or GIFs (you can also paste or drop them on the board)" hidden>🖼 Image</button>
                             <button class="tool-btn add-src" type="button" id="cbGifBtn" title="Search GIFs on KLIPY" hidden>GIF</button>
                             <button class="tool-btn add-src" type="button" id="cbVideoBtn" title="Embed a YouTube / Vimeo video (or paste its link on the board)" hidden>▶ Video</button>
@@ -270,7 +273,6 @@
                             <button class="tool-btn" type="button" data-cb-cmd="insertOrderedList" title="Numbered list">1. List</button>
                             </span>
                             <span class="ctx-group" id="cbGroupArrange">
-                            <button class="tool-btn" type="button" id="cbDup" title="Duplicate (Ctrl+D, or Alt + drag)" disabled>⧉</button>
                             <button class="tool-btn" type="button" id="cbFront" title="Bring to front" disabled>⤒</button>
                             <button class="tool-btn" type="button" id="cbBack" title="Send to back" disabled>⤓</button>
                             <button class="tool-btn danger" type="button" id="cbDelete" title="Delete (Delete key)" disabled>🗑</button>
@@ -306,7 +308,7 @@
                             <button class="tool-btn mode-grid-btn" id="gridBack" type="button" title="Back to Draw">✎ Draw</button>
                             <span class="pick-actions" id="gridPickActions" hidden>
                                 <span class="pick-count" id="gridPickCount"></span>
-                                <button class="tool-btn pick-btn" id="gridPickCopy" type="button" title="Make a copy, then drag it (Ctrl+D)">⧉ Copy</button>
+                                <button class="tool-btn pick-btn" id="gridPickCopy" type="button" title="Make a copy, then drag it (Ctrl+D)" hidden>⧉ Copy</button>
                                 <button class="tool-btn pick-btn danger" id="gridPickDelete" type="button" title="Delete (Delete key)">🗑 Delete</button>
                             </span>
                         </div>

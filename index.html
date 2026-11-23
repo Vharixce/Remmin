@@ -116,7 +116,7 @@
                             <button class="btn calendar-only-btn" id="calendarOnlyBtn" type="button" aria-pressed="false" title="Show ONLY in Calendar (hidden in Explorer)" aria-label="Show ONLY in Calendar (hidden in Explorer)">📆</button>
                             <button class="btn calendar-only-btn" id="memoBtn" type="button" aria-pressed="false" title="Make MEMO (collapse note in calendar)" aria-label="Make MEMO (collapse note in calendar)">📝</button>
                             <button class="btn private-btn" id="privateBtn" type="button" aria-pressed="false" title="Make Private: ask for a pass every time this note is opened" aria-label="Make Private">🔓</button>
-                            <button class="btn" id="saveNoteBtn">Save</button>
+                            <button class="btn btn-primary save-icon-btn" id="saveNoteBtn" type="button" title="Save" aria-label="Save">💾</button>
                             <button class="btn btn-danger" id="deleteNoteBtn">Delete</button>
                         </div>
                     </div>
@@ -195,8 +195,9 @@
                             <button class="tool-btn active" id="toolPen" title="Pen">✎</button>
                             <button class="tool-btn" id="toolEraser" title="Eraser">⌫</button>
                             <button class="tool-btn" id="toolFill" title="Bucket: click an area to fill it with the current colour">🪣</button>
-                            <button class="tool-btn" id="toolImage" title="Add a picture or GIF (or paste one with Ctrl+V)">🖼</button>
-                            <button class="tool-btn" id="toolGif" type="button" title="Search GIFs on KLIPY">GIF</button>
+                            <button class="tool-btn add-btn" id="drawAddBtn" type="button" title="Add a picture or GIF (or paste / drop one)">+ Add</button>
+                            <button class="tool-btn add-src" id="toolImage" title="Add a picture or GIF (or paste one with Ctrl+V)" hidden>🖼</button>
+                            <button class="tool-btn add-src" id="toolGif" type="button" title="Search GIFs on KLIPY" hidden>GIF</button>
                             <input type="file" id="drawImageFile" accept="image/*" multiple hidden>
                             <button class="tool-btn" id="toolUndo" title="Undo">↶</button>
                             <button class="tool-btn" id="toolClear" title="Clear all">✕</button>
@@ -222,11 +223,12 @@
                             <span class="text-colors" id="textColors" title="Text colour"></span>
                             <button class="tool-btn" data-cmd="insertUnorderedList" title="Bullet list (or type “- ” at the start of a line)">&bull; List</button>
                             <button class="tool-btn" data-cmd="insertOrderedList" title="Numbered list (or type “1. ” at the start of a line)">1. List</button>
-                            <button class="tool-btn" id="insertImageBtn" title="Insert image or GIF (you can also paste or drag images in)">🖼 Image</button>
-                            <button class="tool-btn" id="insertGifBtn" type="button" title="Search GIFs on KLIPY">GIF</button>
-                            <button class="tool-btn" id="insertVideoEmbedBtn" type="button" title="Embed a YouTube / Vimeo video (or paste its link)">▶ Video</button>
+                            <button class="tool-btn add-btn" id="textAddBtn" type="button" title="Add a picture, GIF, video or audio (you can also paste or drag them in)">+ Add</button>
+                            <button class="tool-btn add-src" id="insertImageBtn" title="Insert image or GIF (you can also paste or drag images in)" hidden>🖼 Image</button>
+                            <button class="tool-btn add-src" id="insertGifBtn" type="button" title="Search GIFs on KLIPY" hidden>GIF</button>
+                            <button class="tool-btn add-src" id="insertVideoEmbedBtn" type="button" title="Embed a YouTube / Vimeo video (or paste its link)" hidden>▶ Video</button>
                             <input type="file" id="imageFile" accept="image/*" multiple hidden>
-                            <button class="tool-btn" id="insertVoiceBtn" title="Record a voice note">🎤 Voice</button>
+                            <button class="tool-btn add-src" id="insertVoiceBtn" title="Record a voice note" hidden>🎤 Voice</button>
                             <span class="image-tools" id="imageTools" hidden>
                                 <span class="tool-label">Image size</span>
                                 <button class="tool-btn" data-img-size="12.5" title="Small: 1/8 of the width (8 fit on a line)">S</button>
@@ -250,12 +252,14 @@
                             <button class="tool-btn" type="button" data-cb-tool="text" title="Text (T)">T Text</button>
                             <button class="tool-btn" type="button" data-cb-tool="frame" title="Frame (F) – click, or drag to choose its size. Things inside move with it">▭ Frame</button>
                             <button class="tool-btn" type="button" data-cb-tool="arrow" title="Arrow (A) – drag from one thing to another">↗ Arrow</button>
-                            <button class="tool-btn" type="button" id="cbImageBtn" title="Add pictures or GIFs (you can also paste or drop them on the board)">🖼 Image</button>
-                            <button class="tool-btn" type="button" id="cbGifBtn" title="Search GIFs on KLIPY">GIF</button>
-                            <button class="tool-btn" type="button" id="cbVideoBtn" title="Embed a YouTube / Vimeo video (or paste its link on the board)">▶ Video</button>
-                            <button class="tool-btn" type="button" id="cbAudioBtn" title="Record a voice note or add an audio file (you can also drop audio files on the board)">🎤 Audio</button>
+                            <button class="tool-btn add-btn" type="button" id="cbAddBtn" title="Add a picture, GIF, video or audio (you can also paste or drop them on the board)">+ Add</button>
+                            <button class="tool-btn add-src" type="button" id="cbImageBtn" title="Add pictures or GIFs (you can also paste or drop them on the board)" hidden>🖼 Image</button>
+                            <button class="tool-btn add-src" type="button" id="cbGifBtn" title="Search GIFs on KLIPY" hidden>GIF</button>
+                            <button class="tool-btn add-src" type="button" id="cbVideoBtn" title="Embed a YouTube / Vimeo video (or paste its link on the board)" hidden>▶ Video</button>
+                            <button class="tool-btn add-src" type="button" id="cbAudioBtn" title="Record a voice note or add an audio file (you can also drop audio files on the board)" hidden>🎤 Audio</button>
                             <input type="file" id="cbImageFile" accept="image/*" multiple hidden>
-                            <span class="text-colors cb-colors" id="cbColors" title="Colour of the selected sticky notes, frames, arrows or texts"></span>
+                            <span class="ctx-group" id="cbGroupColors"><span class="text-colors cb-colors" id="cbColors" title="Colour of the selected sticky notes, frames, arrows or texts"></span></span>
+                            <span class="ctx-group" id="cbGroupFormat">
                             <button class="tool-btn heading-btn" type="button" id="cbHeading" title="Heading">Heading</button>
                             <button class="tool-btn" type="button" data-cb-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
                             <button class="tool-btn" type="button" data-cb-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
@@ -264,12 +268,15 @@
                             <span class="text-colors" id="cbTextColors" title="Text colour"></span>
                             <button class="tool-btn" type="button" data-cb-cmd="insertUnorderedList" title="Bullet list">&bull; List</button>
                             <button class="tool-btn" type="button" data-cb-cmd="insertOrderedList" title="Numbered list">1. List</button>
-                            <button class="tool-btn" type="button" id="cbUndo" title="Undo (Ctrl+Z)" disabled>↶</button>
-                            <button class="tool-btn" type="button" id="cbRedo" title="Redo (Ctrl+Y)" disabled>↷</button>
+                            </span>
+                            <span class="ctx-group" id="cbGroupArrange">
                             <button class="tool-btn" type="button" id="cbDup" title="Duplicate (Ctrl+D, or Alt + drag)" disabled>⧉</button>
                             <button class="tool-btn" type="button" id="cbFront" title="Bring to front" disabled>⤒</button>
                             <button class="tool-btn" type="button" id="cbBack" title="Send to back" disabled>⤓</button>
-                            <button class="tool-btn" type="button" id="cbDelete" title="Delete (Delete key)" disabled>🗑</button>
+                            <button class="tool-btn danger" type="button" id="cbDelete" title="Delete (Delete key)" disabled>🗑</button>
+                            </span>
+                            <button class="tool-btn" type="button" id="cbUndo" title="Undo (Ctrl+Z)" disabled>↶</button>
+                            <button class="tool-btn" type="button" id="cbRedo" title="Redo (Ctrl+Y)" disabled>↷</button>
                             <button class="tool-btn cb-zoom" type="button" id="cbZoom" title="Back to 100%">100%</button>
                             <button class="tool-btn" type="button" id="cbFit" title="Show everything">⛶</button>
                         </div>

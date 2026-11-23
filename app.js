@@ -2609,7 +2609,7 @@ RemminStore.ready.then(() => {
         if (isPictureData(src)) {
             items.push({
                 label: `Compress picture… (now ${now})`, icon: '🗜',
-                run: () => setTimeout(() => menuAt(x, y, 'Compress to', [
+                run: () => setTimeout(() => menuAt(x != null ? x : parseFloat(pointAnchor.style.left) || 200, y != null ? y : parseFloat(pointAnchor.style.top) || 200, 'Compress to', [
                     { label: `Compress to … KB (now ${now})`, icon: '✎', run: async () => {
                         const cur = sizeOfData(src) / 1024;
                         const answer = await askDialog({ title: 'Compress to … KB', message: `How many KB may the picture be? Now it is ${now}; enter a smaller number (1000 KB = about 1 MB).`, input: String(Math.max(10, Math.round(cur / 2))), okLabel: 'Compress' });
@@ -2678,6 +2678,107 @@ RemminStore.ready.then(() => {
         pointAnchor.style.top = `${y}px`;
         closeMenu();
         showMenu(pointAnchor, title, actions);
+    }
+
+    /* ---- a small bar with the options of what you clicked (picture, video, audio, sticky note…), right above it ----
+     * It lives inside the window's toolbar (so the toolbar's own buttons keep working in it) but floats on the screen. */
+    function rectOf(els) {
+        let r = null;
+        els.forEach((el) => {
+            if (!el || !el.isConnected) return;
+            const b = el.getBoundingClientRect();
+            if (!b.width && !b.height) return;
+            r = r ? { left: Math.min(r.left, b.left), top: Math.min(r.top, b.top), right: Math.max(r.right, b.right), bottom: Math.max(r.bottom, b.bottom) }
+                : { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+        });
+        if (r) { r.width = r.right - r.left; r.height = r.bottom - r.top; }
+        return r;
+    }
+    function makeCtxBar(toolbar, groups = []) {
+        const bar = document.createElement('div');
+        bar.className = 'ctx-bar';
+        bar.hidden = true;
+        bar.innerHTML = '<div class="ctx-slots"></div><div class="ctx-acts"></div>';
+        toolbar.appendChild(bar);
+        const slots = bar.firstChild, acts = bar.lastChild;
+        const park = document.createElement('div');
+        park.hidden = true;
+        toolbar.appendChild(park);
+        groups.forEach((g) => park.appendChild(g));
+        let anchor = null, actions = [], key = null, raf = 0, busy = null, after = null;
+        ['pointerdown', 'mousedown'].forEach((t) => bar.addEventListener(t, (e) => { if (e.target.closest('button')) e.preventDefault(); }));
+        acts.addEventListener('click', (e) => {
+            const b = e.target.closest('[data-ai]');
+            if (!b) return;
+            e.stopPropagation();
+            const a = actions[Number(b.dataset.ai)];
+            if (!a) return;
+            const r = b.getBoundingClientRect();
+            pointAnchor.style.left = `${r.left}px`;
+            pointAnchor.style.top = `${r.bottom}px`;
+            closeMenu();
+            key = null; // its labels may change (loop on / off…)
+            a.run();
+            if (after) setTimeout(after, 0);
+        });
+        function place() {
+            if (bar.hidden) { raf = 0; return; }
+            raf = requestAnimationFrame(place);
+            const r = anchor && anchor();
+            const off = !r || (busy && busy()) || toolbar.offsetParent === null || r.bottom < 0 || r.top > window.innerHeight;
+            bar.style.visibility = off ? 'hidden' : '';
+            if (off) return;
+            bar.style.left = '0px';
+            bar.style.top = '0px';
+            const o = bar.getBoundingClientRect();
+            const tb = toolbar.getBoundingClientRect();
+            const minTop = Math.max(8, tb.bottom + 6);
+            const x = Math.max(8, Math.min(window.innerWidth - o.width - 8, r.left + r.width / 2 - o.width / 2));
+            let y = r.top - o.height - 8;
+            if (y < minTop) y = r.bottom + 8;
+            if (y + o.height > window.innerHeight - 8) y = Math.max(minTop, Math.min(r.top + 8, window.innerHeight - o.height - 8));
+            bar.style.left = `${x - o.left}px`;
+            bar.style.top = `${y - o.top}px`;
+        }
+        function renderActs(list) {
+            const count = {};
+            list.forEach((a) => { count[a.icon || ''] = (count[a.icon || ''] || 0) + 1; });
+            acts.innerHTML = list.map((a, i) => {
+                const words = !a.icon || count[a.icon] > 1 ? `<span class="ctx-txt">${escapeHtml(a.label.replace(/\s*\(.*?\)/g, '').replace(/…/g, '').replace(/^Size /, '').trim())}</span>` : '';
+                return `<button type="button" class="tool-btn ctx-act${a.danger ? ' danger' : ''}" data-ai="${i}" title="${escapeHtml(a.label)}" aria-label="${escapeHtml(a.label)}">${a.icon ? `<span class="ctx-ico">${a.icon}</span>` : ''}${words}</button>`;
+            }).join('');
+        }
+        return {
+            show(o) {
+                anchor = o.anchor; busy = o.busy || null; after = o.after || null;
+                if (o.key !== key || bar.hidden) {
+                    key = o.key;
+                    const want = o.groups || [];
+                    [...slots.children].forEach((g) => { if (!want.includes(g)) park.appendChild(g); });
+                    want.forEach((g) => slots.appendChild(g));
+                    actions = o.actions ? o.actions() : [];
+                    renderActs(actions);
+                }
+                if (bar.hidden) { bar.hidden = false; bar.style.visibility = 'hidden'; }
+                if (!raf) raf = requestAnimationFrame(place);
+            },
+            hide() {
+                if (bar.hidden) return;
+                bar.hidden = true;
+                key = null; anchor = null;
+            }
+        };
+    }
+    // "+ Add": one button with the ways to add something
+    function addMenu(btn, items) {
+        btn.addEventListener('click', () => {
+            const sel = window.getSelection();
+            const range = sel && sel.rangeCount && editorEl.contains(sel.anchorNode) ? sel.getRangeAt(0).cloneRange() : null;
+            showMenu(btn, 'Add', items.map(([label, icon, id]) => ({ label, icon, run: () => {
+                if (range) { editorEl.focus({ preventScroll: true }); sel.removeAllRanges(); sel.addRange(range); }
+                $(id).click();
+            } })));
+        });
     }
     // the same video options in Text, Collage and Draw
     function videoMenuActions(src, { remove, sizes, sizeNow, sound, playing, loop } = {}) {
@@ -2876,6 +2977,7 @@ RemminStore.ready.then(() => {
         textDirty = true;
         queueSave();
         updateTextUndoButtons();
+        if (textCtx) requestAnimationFrame(updateTextCtx);
     }
 
     /* ---------------- undo / redo in the text ----------------
@@ -3421,6 +3523,7 @@ RemminStore.ready.then(() => {
         else textMediaSel = el ? [el] : [];
         editorEl.querySelectorAll('.media-selected').forEach((x) => x.classList.remove('media-selected'));
         textMediaSel.forEach((x) => x.classList.add('media-selected'));
+        updateTextCtx();
     }
     // everything selected in the text, in the order of the text
     function textSelectedItems() {
@@ -3610,6 +3713,40 @@ RemminStore.ready.then(() => {
         $('imageTools').hidden = !selectedImg;
         placeImgHandle();
         $('imageTools').dataset.count = selectedImgs.length > 1 ? `${selectedImgs.length} pictures` : '';
+        updateTextCtx();
+    }
+    // the options of what is selected in the text, right above it
+    var textCtx = null;
+    function updateTextCtx() {
+        if (!textCtx) return;
+        const imgs = selectedImgs.filter((i) => editorEl.contains(i));
+        const media = textMediaSel.filter((x) => editorEl.contains(x));
+        if (imgs.length && !media.length) {
+            const one = imgs.length === 1 ? imgs[0] : null;
+            const src = one ? one.getAttribute('src') || '' : '';
+            $('imageDownload').hidden = !!one;
+            $('imageRemove').hidden = !!one;
+            textCtx.show({
+                key: one ? `img:${src.length}:${src.slice(-40)}` : `imgs:${imgs.length}`,
+                anchor: () => rectOf(imgs),
+                groups: [$('imageTools')],
+                after: updateTextCtx,
+                actions: () => (one ? pictureMenuActions(src, {
+                    x: null, y: null,
+                    place: (nsrc) => { if (!editorEl.contains(one)) return; recordText(); one.src = nsrc; markTextChanged(); updateTextCtx(); },
+                    remove: () => { recordText(); selectImage(null); one.remove(); markTextChanged(); }
+                }) : [])
+            });
+        } else if (media.length === 1 && !imgs.length) {
+            const el = media[0];
+            const isVideo = el.classList.contains('video-embed');
+            textCtx.show({
+                key: `${isVideo ? 'v' : 'a'}:${(el.getAttribute(isVideo ? 'data-video' : 'data-voice') || '').length}:${el.getAttribute('data-loop')}:${el.getAttribute('data-w')}:${el.getAttribute('data-name')}`,
+                anchor: () => rectOf([el]),
+                after: updateTextCtx,
+                actions: () => (isVideo ? textVideoActions(el) : textAudioActions(el).filter((a) => !['▶', '⏸', '🔁'].includes(a.icon)))
+            });
+        } else textCtx.hide();
     }
 
     // the options of a video in the text
@@ -3757,7 +3894,7 @@ RemminStore.ready.then(() => {
     });
     $('textToolbar').addEventListener('click', (e) => {
         const b = e.target.closest('button');
-        if (b && b.id !== 'textUndo' && b.id !== 'textRedo') recordText();
+        if (b && b.id !== 'textUndo' && b.id !== 'textRedo' && !b.classList.contains('ctx-act') && b.id !== 'textAddBtn') recordText();
     }, true);
     $('textUndo').addEventListener('click', undoText);
     $('textRedo').addEventListener('click', redoText);
@@ -4829,8 +4966,11 @@ RemminStore.ready.then(() => {
         const chip = e.target.closest && e.target.closest('.voice-chip');
         if (!chip || !editorEl.contains(chip)) return;
         e.preventDefault();
-        menuAt(e.clientX, e.clientY, 'Audio', audioMenuActions(chip, {
-            x: e.clientX, y: e.clientY,
+        menuAt(e.clientX, e.clientY, 'Audio', textAudioActions(chip, e.clientX, e.clientY));
+    });
+    function textAudioActions(chip, x, y) {
+        return audioMenuActions(chip, {
+            x, y,
             loop: chip.getAttribute('data-loop') === '1',
             setLoop: () => textChipSetLoop(chip, chip.getAttribute('data-loop') !== '1'),
             rename: async () => {
@@ -4840,9 +4980,9 @@ RemminStore.ready.then(() => {
                 chip.querySelector('.voice-name').textContent = `🎤 ${name.trim()}`;
                 markTextChanged();
             },
-            remove: () => { if (voicePlayingChip === chip) stopVoicePlayback(); recordText(); chip.remove(); markTextChanged(); }
-        }));
-    });
+            remove: () => { if (voicePlayingChip === chip) stopVoicePlayback(); recordText(); chip.remove(); selectTextMedia(null); markTextChanged(); }
+        });
+    }
 
     /* ---- recorder ---- */
     const voice = { recorder: null, stream: null, chunks: [], startedAt: 0, timer: null,
@@ -4977,6 +5117,8 @@ RemminStore.ready.then(() => {
     }
 
     $('insertVoiceBtn').addEventListener('click', () => openVoiceModal('text'));
+    textCtx = makeCtxBar($('textToolbar'), [$('imageTools')]);
+    addMenu($('textAddBtn'), [['Picture', '🖼', 'insertImageBtn'], ['GIF', '🎞', 'insertGifBtn'], ['Video (YouTube / Vimeo link)', '▶', 'insertVideoEmbedBtn'], ['Audio / voice note', '🎤', 'insertVoiceBtn']]);
     $('voiceRecBtn').addEventListener('click', () => {
         if (voice.recorder && voice.recorder.state === 'recording') {
             voice.duration = (Date.now() - voice.startedAt) / 1000;
@@ -7282,6 +7424,7 @@ RemminStore.ready.then(() => {
         drawSelectionFrame();
         drawPickFrame();
         animateDrawGifs();
+        updateDrawCtx();
     }
 
     // draws one item; by default on the drawing itself, or on another canvas (g, size W×H, shifted by ox/oy)
@@ -7438,6 +7581,7 @@ RemminStore.ready.then(() => {
         const show = state.draw.tool === 'select' && drawPick.length > 0;
         $('pickActions').hidden = !show;
         if (show) $('pickCount').textContent = drawPick.length === 1 ? '1 selected' : `${drawPick.length} selected`;
+        updateDrawCtx();
     }
 
     function drawPickFrame() {
@@ -8132,9 +8276,17 @@ RemminStore.ready.then(() => {
     dvcVol.addEventListener('change', () => { flushEditor(); animateDrawGifs(); });
 
     // right-click on a video in the drawing: its options
-    function drawVideoMenu(item, x, y) {
+    function drawPicActions(pic, x, y) {
+        return pictureMenuActions(pic.image, {
+            x, y,
+            place: (src) => { if (!state.draw.strokes.includes(pic)) return; pushDrawUndo(); pic.image = src; renderStrokes(); flushEditor(); },
+            remove: () => { pushDrawUndo(); state.draw.strokes = state.draw.strokes.filter((st) => st !== pic); if (drawSel === pic) drawSel = null; drawPick = drawPick.filter((st) => st !== pic); updatePickBar(); renderStrokes(); flushEditor(); }
+        });
+    }
+    function drawVideoMenu(item, x, y) { menuAt(x, y, 'Video', drawVideoActions(item)); }
+    function drawVideoActions(item) {
         const v = drawVideoEl(item.video);
-        menuAt(x, y, 'Video', videoMenuActions(item.video, {
+        return videoMenuActions(item.video, {
             playing: { on: !drawVideoPaused.has(item.video), toggle: () => { if (drawVideoPaused.has(item.video)) drawVideoPaused.delete(item.video); else { drawVideoPaused.add(item.video); v.pause(); } animateDrawGifs(); } },
             sound: { on: !item.muted, toggle: () => { pushDrawUndo(); item.muted = !item.muted; flushEditor(); animateDrawGifs(); } },
             loop: { on: item.loop !== false, toggle: () => { pushDrawUndo(); if (item.loop === false) delete item.loop; else item.loop = false; flushEditor(); animateDrawGifs(); } },
@@ -8142,10 +8294,39 @@ RemminStore.ready.then(() => {
                 pushDrawUndo();
                 state.draw.strokes = state.draw.strokes.filter((s) => s !== item);
                 if (drawSel === item) drawSel = null;
+                drawPick = drawPick.filter((s) => s !== item);
+                updatePickBar();
                 renderStrokes();
                 flushEditor();
             }
-        }));
+        });
+    }
+    // the options of the selected picture / video (or the selection) in the drawing, right above it
+    var drawCtx = null;
+    function drawRectOf(x0, y0, x1, y1) {
+        const r = canvas.getBoundingClientRect();
+        if (!r.width) return null;
+        const left = r.left + x0 * r.width, top = r.top + y0 * r.height, right = r.left + x1 * r.width, bottom = r.top + y1 * r.height;
+        return { left, top, right, bottom, width: right - left, height: bottom - top };
+    }
+    function updateDrawCtx() {
+        if (!drawCtx) return;
+        if (state.prefs.mode !== 'draw') { drawCtx.hide(); return; }
+        const mediaActions = (s) => (s.video ? drawVideoActions(s) : drawPicActions(s, null, null));
+        if (drawSel && state.draw.strokes.includes(drawSel) && drawSel.image) {
+            const s = drawSel;
+            drawCtx.show({ key: s, anchor: () => drawRectOf(s.x, s.y, s.x + s.w, s.y + s.h), busy: () => !!drawSelDrag, after: updateDrawCtx, actions: () => mediaActions(s) });
+        } else if (state.draw.tool === 'select' && drawPick.length) {
+            const one = drawPick.length === 1 && drawPick[0].image ? drawPick[0] : null;
+            drawCtx.show({
+                key: one || `pick:${drawPick.length}`,
+                anchor: () => { const b = pickBox(); return b && drawRectOf(b.x0, b.y0, b.x1, b.y1); },
+                busy: () => !!pickDrag || !!marquee,
+                groups: [$('pickActions')],
+                after: updateDrawCtx,
+                actions: () => (one ? mediaActions(one).filter((a) => !a.danger) : [])
+            });
+        } else drawCtx.hide();
     }
 
     async function addDrawImages(files, at) {
@@ -8289,14 +8470,7 @@ RemminStore.ready.then(() => {
         if (e.pointerType === 'mouse' && e.button === 2) {
             const pic = pictureAt(pointerPos(e, true));
             if (pic && pic.video) { drawVideoMenu(pic, e.clientX, e.clientY); return; }
-            if (pic && pic.image) {
-                menuAt(e.clientX, e.clientY, 'Picture', pictureMenuActions(pic.image, {
-                    x: e.clientX, y: e.clientY,
-                    place: (src) => { if (!state.draw.strokes.includes(pic)) return; pushDrawUndo(); pic.image = src; renderStrokes(); flushEditor(); },
-                    remove: () => { pushDrawUndo(); state.draw.strokes = state.draw.strokes.filter((st) => st !== pic); if (drawSel === pic) drawSel = null; renderStrokes(); flushEditor(); }
-                }));
-                return;
-            }
+            if (pic && pic.image) { menuAt(e.clientX, e.clientY, 'Picture', drawPicActions(pic, e.clientX, e.clientY)); return; }
         }
         if (isEraseButton(e)) {
             if (state.draw.drawing || drawSelDrag || pickDrag || marquee) return;
@@ -8397,8 +8571,21 @@ RemminStore.ready.then(() => {
         if (drawSelDrag) { drawSelDrag = null; flushEditor(); return; }
         if (pickDrag || marquee) { endPick(); return; }
         if (!state.draw.drawing) return;
+        const cur = state.draw.current;
         state.draw.drawing = false;
         state.draw.current = null;
+        // a click (no drag) on a picture or video: select it, so its options show above it
+        if (cur && cur.points && state.draw.tool === 'pen' && cur.points.length <= 2) {
+            const p0 = cur.points[0], p1 = cur.points[cur.points.length - 1];
+            const pic = Math.hypot(p1.x - p0.x, p1.y - p0.y) < 0.004 ? pictureAt(p0) : null;
+            if (pic) {
+                state.draw.strokes = state.draw.strokes.filter((st) => st !== cur);
+                if (drawUndo.length) drawUndo.pop();
+                drawSel = pic;
+                renderStrokes();
+                return;
+            }
+        }
         flushEditor();
     }
 
@@ -8447,6 +8634,8 @@ RemminStore.ready.then(() => {
     $('toolPen').addEventListener('click', () => setTool('pen'));
     $('toolSelect').addEventListener('click', () => setTool('select'));
     $('pickCopy').addEventListener('click', () => duplicatePick());
+    drawCtx = makeCtxBar($('drawToolbar'), [$('pickActions')]);
+    addMenu($('drawAddBtn'), [['Picture', '🖼', 'toolImage'], ['GIF', '🎞', 'toolGif']]);
     $('pickDelete').addEventListener('click', () => deletePick());
     $('toolEraser').addEventListener('click', () => setTool('eraser'));
     // Bucket: click an area of the drawing to fill it with the current colour
@@ -9493,6 +9682,7 @@ RemminStore.ready.then(() => {
         $('cbRedo').disabled = !cb.redo.length;
         const none = !cb.sel.size;
         ['cbDup', 'cbFront', 'cbBack', 'cbDelete'].forEach((id) => { $(id).disabled = none; });
+        updateCbCtx();
     }
     function cbSetTool(tool) {
         cbEndEdit(true);
@@ -9563,6 +9753,44 @@ RemminStore.ready.then(() => {
     cbBoard.addEventListener('change', (e) => {
         if (e.target.classList && e.target.classList.contains('voice-vol')) cbSave();
     });
+    function cbPicActions(it, x, y) {
+        return pictureMenuActions(it.src, {
+            x, y,
+            place: (src) => { if (!cb.items.includes(it)) return; cbRecord(); it.src = src; cbRender(); cbSave(); },
+            remove: () => { cb.sel = new Set([it.id]); cbDelete(); }
+        });
+    }
+    function cbVidActions(it) {
+        return videoMenuActions(it.src, {
+            loop: { on: !!it.loop, toggle: () => { cbRecord(); it.loop = !it.loop; if (!it.loop) delete it.loop; cbRender(); cbSave(); toast(it.loop ? 'Loop on: the video plays again and again' : 'Loop off'); } },
+            remove: () => { cb.sel = new Set([it.id]); cbDelete(); }
+        });
+    }
+    // the options of what is selected on the board (colours, text style, media options…), right above it
+    var cbCtx = null;
+    function updateCbCtx() {
+        if (!cbCtx) return;
+        if (!cbActive()) { cbCtx.hide(); return; }
+        const ids = (cb.editing ? [cb.editing] : [...cb.sel]).filter((id) => cbById(id));
+        if (!ids.length) { cbCtx.hide(); return; }
+        const items = ids.map(cbById);
+        const isMedia = (it) => it.type === 'image' || it.type === 'video' || it.type === 'audio';
+        const groups = [];
+        if (items.some((it) => !isMedia(it))) groups.push($('cbGroupColors'));
+        if (cb.editing || items.some((it) => it.type === 'sticky' || it.type === 'text')) groups.push($('cbGroupFormat'));
+        if (!cb.editing) groups.push($('cbGroupArrange'));
+        const one = items.length === 1 && isMedia(items[0]) ? items[0] : null;
+        cbCtx.show({
+            key: `${ids.join(',')}|${cb.editing || ''}|${one ? `${!!one.loop}|${(one.src || '').length}|${one.name || ''}` : ''}`,
+            anchor: () => rectOf(ids.map((id) => cbEls.get(id) || cbBoard.querySelector(`[data-arrow="${id}"]`))),
+            busy: () => !!cbAct && cbPointers.size > 0,
+            groups,
+            after: updateCbCtx,
+            actions: () => (!one ? [] : one.type === 'image' ? cbPicActions(one, null, null) : one.type === 'video' ? cbVidActions(one)
+                : cbAudioActions(one, cbEls.get(one.id) && cbEls.get(one.id).querySelector('.cb-chip'), null, null).filter((a) => !['▶', '⏸', '🔁'].includes(a.icon)))
+                .filter((a) => !a.danger) // 🗑 is already in the bar
+        });
+    }
     function cbAudioActions(it, chip, x, y) {
         return audioMenuActions(chip, {
             x, y,
@@ -9802,6 +10030,8 @@ RemminStore.ready.then(() => {
         cbAddImages(e.target.files);
         e.target.value = '';
     });
+    cbCtx = makeCtxBar($('collageToolbar'), [$('cbGroupColors'), $('cbGroupFormat'), $('cbGroupArrange')]);
+    addMenu($('cbAddBtn'), [['Picture', '🖼', 'cbImageBtn'], ['GIF', '🎞', 'cbGifBtn'], ['Video (YouTube / Vimeo link)', '▶', 'cbVideoBtn'], ['Audio / voice note', '🎤', 'cbAudioBtn']]);
 
     // colour of the selected sticky notes / frames / arrows / texts (also the colour for new ones)
     function cbColor(color) {
@@ -9971,11 +10201,7 @@ RemminStore.ready.then(() => {
                 e.preventDefault();
                 cb.sel = new Set([it.id]);
                 cbRender();
-                menuAt(e.clientX, e.clientY, 'Picture', pictureMenuActions(it.src, {
-                    x: e.clientX, y: e.clientY,
-                    place: (src) => { if (!cb.items.includes(it)) return; cbRecord(); it.src = src; cbRender(); cbSave(); },
-                    remove: () => { cb.sel = new Set([it.id]); cbDelete(); }
-                }));
+                menuAt(e.clientX, e.clientY, 'Picture', cbPicActions(it, e.clientX, e.clientY));
                 return;
             }
         }
@@ -9999,10 +10225,7 @@ RemminStore.ready.then(() => {
                 e.preventDefault();
                 cb.sel = new Set([it.id]);
                 cbRender();
-                menuAt(e.clientX, e.clientY, 'Video', videoMenuActions(it.src, {
-                    loop: { on: !!it.loop, toggle: () => { cbRecord(); it.loop = !it.loop; if (!it.loop) delete it.loop; cbRender(); cbSave(); toast(it.loop ? 'Loop on: the video plays again and again' : 'Loop off'); } },
-                    remove: () => { cb.sel = new Set([it.id]); cbDelete(); }
-                }));
+                menuAt(e.clientX, e.clientY, 'Video', cbVidActions(it));
                 return;
             }
         }
@@ -11732,6 +11955,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Simpler note toolbars: click a picture, video, audio, sticky note or frame and its options (and colours) show right above it; Image / GIF / Video / Audio are under one "+ Add" button; Save is a 💾 button',
         'Collage and Draw: hold the right mouse button and scroll to zoom (like Ctrl + scroll); a note without windows only shows the small + button',
         'Phone: the sync text at the bottom of the Explorer is bigger and no longer hidden behind the browser bar',
         'GitHub sync: pictures are stored as separate files too, so remmin.json stays small and the 100 MB limit is gone (GitHub meter now shows the whole repo, up to 5 GB)',

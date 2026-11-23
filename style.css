@@ -2435,3 +2435,20 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .hub-btn:hover .hub-img.on, .hub-btn.active .hub-img.on { opacity: 1; }
 .hub-btn:hover .hub-img.off, .hub-btn.active .hub-img.off { opacity: 0; }
 .hub-btn[data-hub="community"] { --hub: #bebfbf; }
+
+/* ---------- the option bar above a clicked picture / video / audio / sticky note ---------- */
+.ctx-bar { position: fixed; z-index: 70; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: min(680px, calc(100vw - 16px));
+    padding: 6px 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+.ctx-bar[hidden] { display: none; }
+.ctx-slots, .ctx-acts, .ctx-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ctx-slots:empty, .ctx-acts:empty { display: none; }
+.ctx-slots > * + * { padding-left: 6px; border-left: 1px solid var(--border); }
+.ctx-slots:not(:empty) + .ctx-acts:not(:empty) { padding-left: 6px; border-left: 1px solid var(--border); }
+.ctx-bar .image-tools { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ctx-bar .image-tools[hidden], .ctx-bar .pick-actions[hidden], .ctx-bar [hidden] { display: none !important; }
+.ctx-bar .tool-btn.ctx-act { width: auto; min-width: 30px; padding: 0 8px; gap: 5px; white-space: nowrap; }
+.ctx-bar .ctx-txt { font-size: 12px; }
+.ctx-bar .tool-btn.danger:hover, .ctx-bar .tool-btn.ctx-act.danger:hover { color: #f87171; border-color: #f87171; }
+.tool-btn.add-btn { width: auto; padding: 0 10px; white-space: nowrap; font-weight: 600; }
+.add-src[hidden] { display: none !important; }
+.btn.save-icon-btn { font-size: 17px; line-height: 1; padding-left: 12px; padding-right: 12px; }

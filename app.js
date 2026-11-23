@@ -12081,6 +12081,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'New Remmin logo (tab icon and top of the Explorer) and new Hub pictures; Hub logos fade in 0.33 s',
         'Paste button in Text, Collage and Draw (handy on a phone); the Duplicate buttons are gone (Ctrl+D still works)',
         'Copy picture also copies the real picture (paste it in Paint, Discord…); Upload video file / Upload GIF file buttons; the option bar no longer covers a frame name',
         'Simpler note toolbars: click a picture, video, audio, sticky note or frame and its options (and colours) show right above it; Image / GIF / Video / Audio are under one "+ Add" button; Save is a 💾 button',
@@ -13456,7 +13457,7 @@ RemminStore.ready.then(() => {
         if (Notification.permission === 'granted') {
             try {
                 // same tag = replaces the previous one instead of stacking up
-                new Notification(title, { body, icon: 'icon.svg', ...(tag ? { tag } : {}) });
+                new Notification(title, { body, icon: 'remmin_logo.svg', ...(tag ? { tag } : {}) });
             } catch (err) {
                 console.warn('Could not show notification', err);
             }

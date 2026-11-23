@@ -2429,7 +2429,7 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 
 /* the hub logos are pictures (hubs_icons/): …1 = normal (round), …2 = hover / active (square) */
 .hub-btn:has(.hub-img) { background: none !important; box-shadow: none !important; border-radius: 0 !important; }
-.hub-btn .hub-img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; user-select: none; transition: opacity .25s ease; }
+.hub-btn .hub-img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; user-select: none; transition: opacity .33s ease; }
 /* the two pictures lie on top of each other and fade into one another */
 .hub-btn .hub-img.on { opacity: 0; }
 .hub-btn:hover .hub-img.on, .hub-btn.active .hub-img.on { opacity: 1; }
@@ -2453,3 +2453,6 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .add-src[hidden] { display: none !important; }
 .btn.save-icon-btn { font-size: 17px; line-height: 1; padding-left: 12px; padding-right: 12px; }
 .gif-foot .gif-upload { margin-right: auto; padding: 4px 10px; font-size: 12px; }
+.sidebar-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sidebar-title .sidebar-logo { height: 26px; width: auto; flex: none; display: block; user-select: none; }
+.sidebar-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

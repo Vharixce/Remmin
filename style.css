@@ -1165,6 +1165,11 @@ input[type="color"] {
     .sidebar-footer { flex-wrap:wrap; }
     .footer-btn { min-height:36px; font-size:11px; }
     .sync-status, .github-status { padding:6px 10px; overflow-wrap:anywhere; }
+    /* phones: the sidebar ends where the visible screen ends (not behind the browser bar), and the sync text is easy to read */
+    .sidebar { bottom:auto; height:100vh; height:100dvh; }
+    .github-status { font-size:13px; line-height:1.4; color:var(--text); white-space:normal; text-overflow:clip; cursor:default;
+        border-bottom:none; border-radius:0; background:var(--panel, rgba(255,255,255,0.04));
+        padding:10px 12px calc(28px + env(safe-area-inset-bottom, 0px)); }
     .calendar-month { min-width:0; flex:1; font-size:16px; }
     .calendar-grid, .calendar-weekdays { gap:2px; }
     .calendar-count { display:none; }

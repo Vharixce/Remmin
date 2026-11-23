@@ -11711,8 +11711,10 @@ RemminStore.ready.then(() => {
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
     // newest first: the first line is the latest patch (shown in the broadcast), the rest is shown in its popup
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
-    const APP_BUILD = '2026-11-20.1';
+    const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Phone: the sync text at the bottom of the Explorer is bigger and no longer hidden behind the browser bar',
+        'GitHub sync: pictures are stored as separate files too, so remmin.json stays small and the 100 MB limit is gone (GitHub meter now shows the whole repo, up to 5 GB)',
         'Hub logos fade smoothly between normal and hover (0.25 s)',
         'Hubs: your own logos; Community Hub instead of the Authoritarian and Anarchy hubs',
         'Collage: bigger standard text (about 120%)',
@@ -12204,19 +12206,42 @@ RemminStore.ready.then(() => {
     }
     const ghMediaDir = () => { const pth = githubConfig.path || 'remmin.json'; const i = pth.lastIndexOf('/'); return `${i >= 0 ? pth.slice(0, i + 1) : ''}remmin-media`; };
     // the videos / audio of the remote file: the ones this device has are reused, the others are downloaded
+    /* Pictures (since 2026-11-23) also live in remmin-media/: in remmin.json a picture is "remmin-pic:p<id>".
+     * Only the synced copy changes: on this device the notes keep the pictures as they are. */
+    const PIC_RE = /data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]{2000,}/gi;
+    const PIC_TOKEN_RE = /remmin-pic:(p[0-9a-z]{4,40})/g;
+    const picCache = new Map(); // id → data:image text (pictures seen this session)
+    let picCacheSeeded = false;
+    function picsOut(text, pics) {
+        return text.replace(PIC_RE, (m) => {
+            const id = `p${mediaHash(m)}`;
+            pics[id] = m;
+            picCache.set(id, m);
+            return `remmin-pic:${id}`;
+        });
+    }
+    function seedPicCache() {
+        if (picCacheSeeded) return;
+        picCacheSeeded = true;
+        try { picsOut(JSON.stringify([state.notes, state.trash]), {}); } catch (_) { /* only a cache */ }
+    }
     async function ghLoadMedia(data) {
         if (!data || Array.isArray(data) || !data.mediaIndex || typeof data.mediaIndex !== 'object') return;
         const media = { ...(data.media && typeof data.media === 'object' ? data.media : {}) };
         const todo = [];
+        if (Object.keys(data.mediaIndex).some((id) => id[0] === 'p' && !picCache.has(id))) seedPicCache();
         Object.entries(data.mediaIndex).forEach(([id, info]) => {
             if (!info || typeof info.sha !== 'string') return;
-            const have = state.media[id] || (state.mediaGone && state.mediaGone[id]);
+            const have = state.media[id] || (state.mediaGone && state.mediaGone[id]) || picCache.get(id);
             if (have && have.length === info.len) media[id] = have; else todo.push([id, info]);
         });
         for (const [k, [id, info]] of todo.entries()) {
             updateGithubStatus(`GitHub: downloading media ${k + 1}/${todo.length}…`);
             const blob = await githubRequest('GET', null, ghRepoUrl(`/git/blobs/${info.sha}`));
-            if (blob && typeof blob.content === 'string') media[id] = `data:${info.mime || 'video/mp4'};base64,${blob.content.replace(/\s/g, '')}`;
+            if (blob && typeof blob.content === 'string') {
+                media[id] = `data:${info.mime || 'video/mp4'};base64,${blob.content.replace(/\s/g, '')}`;
+                if (id[0] === 'p') picCache.set(id, media[id]);
+            }
         }
         data.media = media;
     }
@@ -12237,9 +12262,29 @@ RemminStore.ready.then(() => {
         let text;
         if (meta.content && meta.encoding === 'base64') text = decodeGithubFile(meta.content);
         else text = await githubRequest('GET', null, url + at, 'application/vnd.github.raw+json'); // files > 1 MB
-        const data = text && text.trim() ? JSON.parse(text) : [];
+        let data = text && text.trim() ? JSON.parse(text) : [];
         githubConfig.remoteMediaIndex = data && !Array.isArray(data) && data.mediaIndex && typeof data.mediaIndex === 'object' ? data.mediaIndex : {};
         await ghLoadMedia(data);
+        if (data && !Array.isArray(data)) {
+            const media = data.media || {};
+            if (text.includes('remmin-pic:')) {
+                // put the pictures back into the notes
+                const missing = new Set();
+                const fixed = JSON.parse(text.replace(PIC_TOKEN_RE, (m, id) => {
+                    const pic = media[id] || picCache.get(id);
+                    if (!pic) missing.add(id);
+                    return pic || m;
+                }));
+                if (missing.size) {
+                    const err = new Error(`GitHub: ${missing.size} picture(s) could not be downloaded, trying again later`);
+                    err.quiet = true;
+                    throw err;
+                }
+                fixed.media = media;
+                data = fixed;
+            }
+            Object.keys(media).forEach((id) => { if (id[0] === 'p') delete media[id]; });
+        }
         if (!legacy) {
             const mediaBytes = Object.values(githubConfig.remoteMediaIndex).reduce((t, m) => t + Math.round((m.len || 0) * 0.75), 0);
             githubConfig.fileSize = (meta.size || 0) + mediaBytes;
@@ -12252,23 +12297,11 @@ RemminStore.ready.then(() => {
     async function pushRemote(snap, parentSha) {
         const parent = parentSha || await ghHead();
         if (!parent) return pushRemoteContents(snap); // an empty repo: the first file the simple way
-        // 1) the videos / audio that GitHub doesn't have yet, each as its own file
-        const prevIndex = githubConfig.remoteMediaIndex || {};
-        const index = {};
-        const ids = Object.keys(snap.media || {});
-        const fresh = ids.filter((id) => !(prevIndex[id] && prevIndex[id].len === snap.media[id].length));
-        for (const [k, id] of fresh.entries()) {
-            updateGithubStatus(`GitHub: uploading media ${k + 1}/${fresh.length}…`);
-            const data = snap.media[id];
-            const cut = data.indexOf(';base64,');
-            const r = await githubRequest('POST', { content: data.slice(cut + 8), encoding: 'base64' }, ghRepoUrl('/git/blobs'));
-            index[id] = { sha: r.sha, mime: data.slice(5, cut), len: data.length };
-        }
-        ids.forEach((id) => { if (!index[id]) index[id] = prevIndex[id]; });
-        // 2) remmin.json, with only the list of media files
-        const payload = {
+        // 0) remmin.json without the pictures (each picture becomes its own file, like the videos)
+        const pics = {};
+        const bodyText = picsOut(JSON.stringify({
             app: 'Remmin',
-            version: 2,
+            version: 3,
             updatedAt: snap.updatedAt || new Date().toISOString(),
             folders: snap.folders,
             notes: snap.notes,
@@ -12276,14 +12309,30 @@ RemminStore.ready.then(() => {
             ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
             ...(snap.settings ? { settings: snap.settings } : {}),
             trash: snap.trash || [],
-            trashGone: snap.trashGone || {},
-            mediaIndex: index,
-            appBuild: APP_BUILD
-        };
-        const fileText = JSON.stringify(payload);
+            trashGone: snap.trashGone || {}
+        }), pics);
+        const all = { ...(snap.media || {}), ...pics };
+        // 1) the videos / audio / pictures that GitHub doesn't have yet, each as its own file
+        const prevIndex = githubConfig.remoteMediaIndex || {};
+        const index = {};
+        const ids = Object.keys(all);
+        const fresh = ids.filter((id) => !(prevIndex[id] && prevIndex[id].len === all[id].length));
+        for (const [k, id] of fresh.entries()) {
+            updateGithubStatus(`GitHub: uploading media ${k + 1}/${fresh.length}…`);
+            const data = all[id];
+            const cut = data.indexOf(';base64,');
+            const r = await githubRequest('POST', { content: data.slice(cut + 8), encoding: 'base64' }, ghRepoUrl('/git/blobs'));
+            index[id] = { sha: r.sha, mime: data.slice(5, cut), len: data.length };
+        }
+        ids.forEach((id) => { if (!index[id]) index[id] = prevIndex[id]; });
+        // a picture that is still "remmin-pic:" in the notes (never lose its file)
+        for (const m of bodyText.matchAll(PIC_TOKEN_RE)) if (!index[m[1]] && prevIndex[m[1]]) index[m[1]] = prevIndex[m[1]];
+        // 2) remmin.json, with only the list of media files
+        const payload = { updatedAt: snap.updatedAt || new Date().toISOString() };
+        const fileText = `${bodyText.slice(0, -1)},"mediaIndex":${JSON.stringify(index)},"appBuild":${JSON.stringify(APP_BUILD)}}`;
         const fileBytes = new TextEncoder().encode(fileText).length;
         if (fileBytes > 95 * 1048576) {
-            const err = new Error(`remmin.json would be ${(fileBytes / 1048576).toFixed(0)} MB (GitHub allows 100 MB per file): compress or remove some pictures (click the storage bars to see what is big)`);
+            const err = new Error(`remmin.json would be ${(fileBytes / 1048576).toFixed(0)} MB (GitHub allows 100 MB per file): that is a lot of text, remove some notes or empty the Trash`);
             err.tooBig = true;
             throw err;
         }
@@ -13341,7 +13390,7 @@ RemminStore.ready.then(() => {
     });
 
     /* ---------------- storage meters (above Trash) ---------------- */
-    const GITHUB_FILE_LIMIT = 100 * 1024 * 1024; // GitHub refuses files over 100 MB
+    const GITHUB_REPO_LIMIT = 5 * 1024 ** 3; // GitHub: keep a repository under 5 GB (each file under 100 MB)
     let localQuota = null;
     // 6,18 MB (used: always two decimals) · 100 MB / 120 GB (totals: as short as possible)
     const sizeText = (bytes, fixed, unit) => {
@@ -13374,7 +13423,7 @@ RemminStore.ready.then(() => {
         clearTimeout(meterTimer);
         meterTimer = setTimeout(() => {
             setMeter('meterGithub', githubConfigured(), Number.isFinite(githubConfig.fileSize) ? githubConfig.fileSize : null,
-                GITHUB_FILE_LIMIT, 'Size of remmin.json on GitHub (GitHub allows files up to 100 MB)');
+                GITHUB_REPO_LIMIT, 'Your notes + pictures, videos and audio on GitHub (every file is separate; GitHub wants a repository under 5 GB)');
             setMeter('meterServer', serverConfigured(), Number.isFinite(serverConfig.fileSize) ? serverConfig.fileSize : null,
                 null, 'Size of your notes on your server');
             const quota = RemminStore.usingIndexedDB ? localQuota : 5 * 1024 * 1024;

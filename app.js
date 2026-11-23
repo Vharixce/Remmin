@@ -7078,6 +7078,20 @@ RemminStore.ready.then(() => {
 
     // Two fingers = zoom/move, one finger = draw. `content` (the canvas) is
     // scaled with a CSS transform inside `viewport`.
+    // hold the right mouse button + scroll = zoom, like Ctrl + scroll (Collage and Draw)
+    let rightHeld = false, rightZoomed = false;
+    window.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse' && e.button === 2) { rightHeld = true; rightZoomed = false; } }, true);
+    window.addEventListener('pointerup', (e) => { if (e.pointerType === 'mouse' && e.button === 2) rightHeld = false; }, true);
+    window.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse' && !(e.buttons & 2)) rightHeld = false; }, true);
+    window.addEventListener('blur', () => { rightHeld = false; });
+    // letting go of the right button after zooming: no right-click menu
+    window.addEventListener('contextmenu', (e) => { if (rightZoomed) { rightZoomed = false; e.preventDefault(); e.stopPropagation(); } }, true);
+    function rightZoomWheel(e) {
+        if (e.ctrlKey || e.metaKey || !(rightHeld || (e.buttons & 2))) return false;
+        if (!rightZoomed) { rightZoomed = true; closeMenu(); }
+        return true;
+    }
+
     function createZoom(viewport, content, onPinchStart, onChange) {
         const z = { scale: 1, tx: 0, ty: 0 };
         const MAX = 8;
@@ -7189,9 +7203,11 @@ RemminStore.ready.then(() => {
         viewport.addEventListener('pointercancel', up, true);
 
         viewport.addEventListener('wheel', (e) => {
-            if (e.ctrlKey || e.metaKey) {
-                // Ctrl + scroll: zoom in small steps
+            const rz = rightZoomWheel(e);
+            if (e.ctrlKey || e.metaKey || rz) {
+                // Ctrl + scroll (or right button + scroll): zoom in small steps
                 e.preventDefault();
+                if (rz && onPinchStart) onPinchStart(); // no erasing while zooming with the right button
                 const p = local(e);
                 const s0 = z.scale;
                 const s = Math.min(MAX, Math.max(1, s0 * wheelZoomFactor(e)));
@@ -7240,6 +7256,11 @@ RemminStore.ready.then(() => {
 
     // A pinch started while the first finger was drawing: drop that stroke
     function cancelStroke() {
+        if (rightErase) {
+            // right button held to zoom: undo what its first click erased
+            rightErase = false;
+            if (eraseSaved && drawUndo.length) { restoreDrawSnapshot(drawUndo.pop()); eraseSaved = false; flushEditor(); }
+        }
         if (state.draw.drawing && state.draw.current) {
             const i = state.draw.strokes.indexOf(state.draw.current);
             if (i >= 0) state.draw.strokes.splice(i, 1);
@@ -8504,7 +8525,6 @@ RemminStore.ready.then(() => {
         setMode(note.windows[0] || w);
         toast(`${WINDOW_INFO[w][0]} window removed (what was in it stays saved: add the window again to see it)`);
     }
-    $('noWindows').addEventListener('click', (e) => { const b = e.target.closest('[data-window]'); if (b) addWindow(b.dataset.window); });
     $('addWindowBtn').addEventListener('click', () => {
         const note = noteById(state.currentNoteId);
         if (!note) return;
@@ -8528,7 +8548,6 @@ RemminStore.ready.then(() => {
         const wins = noteWindows(winNote);
         updateWindowTabs(winNote);
         const noWindows = !!winNote && !wins.length;
-        $('noWindows').hidden = !noWindows;
         if (noWindows) {
             ['collageBoard', 'collageToolbar', 'projectBoard', 'textToolbar', 'drawToolbar', 'gridToolbar', 'zoomHint'].forEach((id) => { $(id).style.display = 'none'; });
             editorEl.style.display = 'none'; drawContainer.style.display = 'none'; gridContainer.style.display = 'none';
@@ -10255,8 +10274,8 @@ RemminStore.ready.then(() => {
 
     cbBoard.addEventListener('wheel', (e) => {
         if (!cbActive()) return;
-        if (e.ctrlKey || e.metaKey) {
-            // Ctrl + scroll: zoom in small steps
+        if (e.ctrlKey || e.metaKey || rightZoomWheel(e)) {
+            // Ctrl + scroll (or right button + scroll): zoom in small steps
             e.preventDefault();
             const l = cbLocal(e);
             cbZoomAt(l.x, l.y, wheelZoomFactor(e));
@@ -11713,6 +11732,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Collage and Draw: hold the right mouse button and scroll to zoom (like Ctrl + scroll); a note without windows only shows the small + button',
         'Phone: the sync text at the bottom of the Explorer is bigger and no longer hidden behind the browser bar',
         'GitHub sync: pictures are stored as separate files too, so remmin.json stays small and the 100 MB limit is gone (GitHub meter now shows the whole repo, up to 5 GB)',
         'Hub logos fade smoothly between normal and hover (0.25 s)',

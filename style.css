@@ -1862,7 +1862,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .tree-menu-item.danger { color: var(--danger); }
 .tree-menu-icon { width: 18px; text-align: center; flex-shrink: 0; }
 .tree-menu-title { font-size: 12px; color: var(--text-dim); padding: 4px 6px 6px; }
-.tree-menu-colors { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 6px 6px; max-width: 220px; }
+.tree-menu-colors { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 6px 6px; max-width: 280px; }
 .tree-menu-colors .text-color.selected { outline: 2px solid var(--primary); outline-offset: 2px; }
 
 /* items with a background colour */

@@ -1029,9 +1029,10 @@ RemminStore.ready.then(() => {
     // (same lightness and greyness for every colour, red ≈ #361F1F)
     const BG_COLORS = [
         ['', 'No colour'],
-        ['#372020', 'Red'], ['#372b20', 'Orange'], ['#373420', 'Yellow'],
-        ['#203722', 'Green'], ['#202937', 'Blue'], ['#2b2037', 'Purple'],
-        ['#000000', 'Black'], ['#c9c9ce', 'Light grey']
+        ['#372020', 'Red'], ['#372b20', 'Orange'], ['#373420', 'Yellow'], ['#2d3720', 'Lime'],
+        ['#203722', 'Green'], ['#20372f', 'Teal'], ['#203437', 'Cyan'], ['#202937', 'Blue'],
+        ['#212037', 'Indigo'], ['#2b2037', 'Purple'], ['#372037', 'Magenta'], ['#37202c', 'Pink'],
+        ['#000000', 'Black'], ['#55565c', 'Grey'], ['#c9c9ce', 'White']
     ];
 
     // background colour of a tree item; dark text on light colours, light text on dark ones
@@ -12096,6 +12097,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Folder / note background colours: 12 colours plus black, grey and white',
         'Folders can be hidden in the Explorer too (folder ☰ menu → Hide in Explorer); the 📆 button shows them again',
         'New Remmin logo (tab icon and top of the Explorer) and new Hub pictures; Hub logos fade in 0.33 s',
         'Paste button in Text, Collage and Draw (handy on a phone); the Duplicate buttons are gone (Ctrl+D still works)',

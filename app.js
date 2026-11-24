@@ -9474,6 +9474,7 @@ RemminStore.ready.then(() => {
         renderProjectSide();
         $('pjUndo').disabled = !pj.undo.length;
         $('pjRedo').disabled = !pj.redo.length;
+        $('pjCopy').disabled = !pj.sel.size;
         pjCols.innerHTML = pj.columns.map((col) => `
             <div class="pj-col" data-col="${col.id}">
                 <div class="pj-col-head">
@@ -9611,6 +9612,10 @@ RemminStore.ready.then(() => {
         const t = e.target;
         if (t.closest('#pjUndo')) { pjUndoRedo(true); return; }
         if (t.closest('#pjRedo')) { pjUndoRedo(false); return; }
+        if (t.closest('#pjCopy')) { pjCopyCards([...pj.sel], false, true); return; }
+        if (t.closest('#pjPaste')) { pjPasteButton(); return; }
+        const inCol = t.closest('.pj-col');
+        if (inCol) pj.lastCol = inCol.dataset.col;
         if (t.closest('#pjAddCol')) {
             if (pj.editing && pj.editFinish) pj.editFinish(true);
             pjRecord();
@@ -9632,6 +9637,7 @@ RemminStore.ready.then(() => {
                 { label: 'Rename', icon: '✎', run: () => pjEditColumn(colId) },
                 { label: 'Add item', icon: '+', run: () => pjAddCard(colId) }
             ];
+            if (pjClip) actions.push({ label: `Paste ${pjClip.cards.length === 1 ? 'item' : `${pjClip.cards.length} items`} here`, icon: '📋', run: () => pjPasteCards(pjClip.cards, { colId }) });
             if (i > 0) actions.push({ label: 'Move left', icon: '←', run: () => pjMoveColumn(colId, -1) });
             if (i < pj.columns.length - 1) actions.push({ label: 'Move right', icon: '→', run: () => pjMoveColumn(colId, 1) });
             actions.push({ label: 'Delete column', icon: '🗑', danger: true, run: () => pjDeleteColumn(colId) });
@@ -9787,7 +9793,122 @@ RemminStore.ready.then(() => {
     document.addEventListener('pointercancel', pjUp);
     // while dragging on a phone, the page must not scroll
     document.addEventListener('touchmove', (e) => { if (pjDrag) e.preventDefault(); }, { passive: false });
-    pjBoard.addEventListener('contextmenu', (e) => { if (e.target.closest('.pj-card') && e.pointerType !== 'mouse') e.preventDefault(); });
+    pjBoard.addEventListener('contextmenu', (e) => {
+        const card = e.target.closest('.pj-card');
+        if (!card) return;
+        if (e.pointerType && e.pointerType !== 'mouse') { e.preventDefault(); return; }
+        if (!pjActive() || card.classList.contains('editing') || e.target.closest('select')) return;
+        // right-click: copy / cut / paste / delete (the selected items, or just this one)
+        e.preventDefault();
+        const id = card.dataset.card;
+        const ids = pj.sel.has(id) ? [...pj.sel] : [id];
+        const n = ids.length > 1 ? `${ids.length} items` : 'item';
+        const actions = [
+            { label: `Copy ${n}`, icon: '⧉', run: () => pjCopyCards(ids, false, true) },
+            { label: `Cut ${n}`, icon: '✂', run: () => pjCopyCards(ids, true, true) }
+        ];
+        if (pjClip) actions.push({ label: `Paste ${pjClip.cards.length === 1 ? 'item' : `${pjClip.cards.length} items`} below`, icon: '📋', run: () => pjPasteCards(pjClip.cards, { afterId: id }) });
+        actions.push({ label: `Delete ${n}`, icon: '🗑', danger: true, run: () => {
+            pjRecord();
+            const gone = new Set(ids);
+            pj.columns.forEach((c) => { c.cards = c.cards.filter((k) => !gone.has(k.id)); });
+            pj.sel = new Set();
+            renderProject();
+            pjSave();
+            toast(`${ids.length === 1 ? 'Item' : `${ids.length} items`} deleted (↶ to undo)`);
+        } });
+        menuAt(e.clientX, e.clientY, ids.length > 1 ? `${ids.length} items` : 'Item', actions);
+    });
+
+    /* ---- copy / cut / paste items ---- */
+    let pjClip = null; // { plain, cards } — the items copied last (with their tags, people and dropdowns)
+    const pjCardsText = (cards) => cards.map((c) => (c.text || '').replace(/\n+/g, ' ').trim() || 'Untitled').join('\n');
+    function pjCopyCards(ids, cut = false, toClipboard = false) {
+        const cards = [];
+        pj.columns.forEach((c) => c.cards.forEach((k) => { if (ids.includes(k.id)) cards.push(JSON.parse(JSON.stringify(k))); }));
+        if (!cards.length) { toast('Select items first (Shift + click), then copy'); return null; }
+        pjClip = { plain: pjCardsText(cards), cards };
+        if (toClipboard && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(pjClip.plain).catch(() => {});
+        if (cut) {
+            pjRecord();
+            const gone = new Set(ids);
+            pj.columns.forEach((c) => { c.cards = c.cards.filter((k) => !gone.has(k.id)); });
+            pj.sel = new Set();
+            renderProject();
+            pjSave();
+        }
+        toast(`${cards.length === 1 ? 'Item' : `${cards.length} items`} ${cut ? 'cut' : 'copied'}: paste with Ctrl+V or 📋 Paste`);
+        return pjClip;
+    }
+    // where pasted items go: below the (last) selected item, else in the column you clicked last, else the first column
+    function pjPasteSpot() {
+        const sel = [...pj.sel].map(pjFindCard).filter(Boolean);
+        if (sel.length) { const last = sel[sel.length - 1]; return { col: last.col, index: last.i + 1 }; }
+        const col = pjCol(pj.lastCol) || pj.columns[0];
+        return col ? { col, index: col.cards.length } : null;
+    }
+    function pjPasteCards(cards, where = {}) {
+        if (!cards || !cards.length) return;
+        if (pj.editing && pj.editFinish) pj.editFinish(true);
+        let spot = null;
+        if (where.afterId) { const f = pjFindCard(where.afterId); if (f) spot = { col: f.col, index: f.i + 1 }; }
+        else if (where.colId) { const col = pjCol(where.colId); if (col) spot = { col, index: col.cards.length }; }
+        if (!spot) spot = pjPasteSpot();
+        if (!spot) return;
+        // only keep the tags / people / dropdowns this board has (items can come from another note)
+        const keep = (ids, has) => (ids || []).filter((x) => has(x));
+        const fresh = cards.map((c) => {
+            const k = { id: uid(), text: c.text || '' };
+            const depts = keep(c.depts, pjDept), people = keep(c.people, pjPerson);
+            if (depts.length) k.depts = depts;
+            if (people.length) k.people = people;
+            const fields = {};
+            Object.entries(c.fields || {}).forEach(([fid, v]) => { const f = pjField(fid); if (f) fields[fid] = (f.options || []).some((o) => o.id === v) ? v : ''; });
+            if (Object.keys(fields).length) k.fields = fields;
+            return k;
+        });
+        pjRecord();
+        spot.col.cards.splice(spot.index, 0, ...fresh);
+        pj.sel = new Set(fresh.map((k) => k.id));
+        renderProject();
+        pjSave();
+        const el = pjCols.querySelector(`[data-card="${fresh[fresh.length - 1].id}"]`);
+        if (el) el.scrollIntoView({ block: 'nearest' });
+        toast(`${fresh.length === 1 ? 'Item' : `${fresh.length} items`} pasted`);
+    }
+    // text from somewhere else: one item per line
+    function pjPasteText(text) {
+        if (pjClip && text.trim() === pjClip.plain.trim()) { pjPasteCards(pjClip.cards); return; }
+        const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 200);
+        if (lines.length) pjPasteCards(lines.map((l) => ({ text: l.slice(0, 2000) })));
+    }
+    async function pjPasteButton() {
+        let text = '';
+        try { text = navigator.clipboard && navigator.clipboard.readText ? await navigator.clipboard.readText() : ''; } catch (_) { text = ''; }
+        if (text) pjPasteText(text);
+        else if (pjClip) pjPasteCards(pjClip.cards);
+        else toast('Nothing to paste: copy items first (Shift + click to select, then Ctrl+C)');
+    }
+    const pjTyping = (e) => {
+        const t = e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]');
+        return !!(t && t.offsetParent !== null);
+    };
+    ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
+        if (!pjActive() || pj.editing || pjTyping(e) || !pj.sel.size) return;
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && String(sel).trim()) return; // copying selected text
+        const clip = pjCopyCards([...pj.sel], type === 'cut');
+        if (!clip) return;
+        e.preventDefault();
+        e.clipboardData.setData('text/plain', clip.plain);
+    }));
+    document.addEventListener('paste', (e) => {
+        if (!pjActive() || pj.editing || pjTyping(e)) return;
+        const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+        if (!text && !pjClip) return;
+        e.preventDefault();
+        if (text) pjPasteText(text); else pjPasteCards(pjClip.cards);
+    });
 
     document.addEventListener('keydown', (e) => {
         if (!pjActive() || pj.editing) return;
@@ -12378,6 +12499,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Project: copy, cut and paste items (Ctrl+C / Ctrl+X / Ctrl+V, the Copy / Paste buttons or right-click); pasting text from elsewhere makes one item per line',
         'Project: drag things in the boxes on the right (and the options of a dropdown) to change their order; Repeat on: hold the mouse button and slide over the days to select them',
         'Explorer: the ☰ button of a note is centred vertically',
         'Project: rename a dropdown (double-click its name or ✎)',

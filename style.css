@@ -1607,7 +1607,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
     .note-item .item-actions, .folder-header .folder-actions, .calendar-note-item .item-actions { display: none !important; }
     .note-item .note-item-title, .note-item:hover .note-item-title { padding-right: 0 !important; }
     .note-item { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; }
-    .note-item .note-more { grid-column: 2; grid-row: 1 / span 2; width: 30px; height: 30px; }
+    .note-item .note-more { grid-column: 2; grid-row: 1; width: 30px; height: 30px; }
     .note-item .note-item-title { grid-column: 1; grid-row: 1; }
     .note-item .note-item-meta { grid-column: 1; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .folder-header { gap: 6px; }
@@ -1840,12 +1840,12 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .folder-header .tree-menu-btn { margin-left: auto; }
 .folder-header .tree-menu-btn + .folder-add { margin-left: 4px; }
 .note-item { position: relative; }
-.note-item .note-more { position: absolute; top: 6px; right: 6px; }
+.note-item .note-more { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); }
 .note-item:hover .note-item-title, .note-item:focus-within .note-item-title { padding-right: 30px; }
 @media (hover: none) { .note-item .note-item-title { padding-right: 0; } }
 @media (max-width: 760px), (hover: none) {
     .tree-menu-btn { opacity: 1; width: 30px; height: 30px; font-size: 15px; }
-    .note-item .note-more { position: static; }
+    .note-item .note-more { position: static; transform: none; grid-row: 1; }
 }
 
 .tree-menu {

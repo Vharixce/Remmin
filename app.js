@@ -12313,6 +12313,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Explorer: the ☰ button of a note is centred vertically',
         'Project: rename a dropdown (double-click its name or ✎)',
         'Project: add and rename boxes (departments, people) and Dropdown boxes (each dropdown has its own options; give it to an item and pick an option there); the Explorer only shows note titles',
         'Folder / note background colours: 12 colours plus black, grey and white',

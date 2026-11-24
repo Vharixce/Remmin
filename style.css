@@ -2227,12 +2227,14 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 }
 @media (prefers-reduced-motion: reduce) { .show-hidden-btn.active, .show-hidden-btn.active::after { animation-duration: 3.6s; } }
 .note-item.calendar-only,
-.note-item.calendar-only.has-bg {
+.note-item.calendar-only.has-bg,
+.folder-header.folder-hidden,
+.folder-header.folder-hidden.has-bg {
     /* fixed: all hidden notes share one stripe pattern, so the stripes line up from item to item */
     background: repeating-linear-gradient(135deg, #202022 0 7px, #141516 7px 14px) fixed;
     color: #f1f2f4;
 }
-.note-item.calendar-only:hover { box-shadow: inset 0 0 0 100vmax rgba(255, 255, 255, .06); }
+.note-item.calendar-only:hover, .folder-header.folder-hidden:hover { box-shadow: inset 0 0 0 100vmax rgba(255, 255, 255, .06); }
 .note-item.calendar-only .note-item-meta { color: #d4d6da; }
 /* the open note when it is "Show ONLY in Calendar": same stripes as in the Explorer */
 /* the stripes cover the whole right side (top bar included); fixed, so every striped part lines up */

@@ -903,29 +903,32 @@ RemminStore.ready.then(() => {
         const onlyHidden = !!state.prefs.showHiddenNotes;
         const listed = (n) => (onlyHidden ? !!n.calendarOnly : !n.calendarOnly);
         const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId && listed(n)));
-        // in "only hidden" mode: skip folders without hidden notes, and open the rest
-        const hasListed = (folderId) => state.notes.some((n) => n.folderId === folderId && listed(n)) || childFolders(folderId).some((f) => hasListed(f.id));
+        // in "only hidden" mode: skip folders without hidden notes or hidden folders, and open the rest
+        const hasListed = (folderId) => state.notes.some((n) => n.folderId === folderId && listed(n)) || childFolders(folderId).some((f) => f.hidden || hasListed(f.id));
 
-        const folderHtml = (folder) => {
-            if (onlyHidden && !hasListed(folder.id)) return '';
-            const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id && listed(n)));
+        // a hidden folder (📆) hides everything in it; with "show hidden" on, it is listed with all it holds
+        const folderHtml = (folder, inHidden = false) => {
+            const hid = inHidden || !!folder.hidden;
+            if (!onlyHidden && folder.hidden) return '';
+            if (onlyHidden && !hid && !hasListed(folder.id)) return '';
+            const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id && (hid && onlyHidden ? true : listed(n))));
             const subs = childFolders(folder.id);
             const expanded = onlyHidden || state.prefs.expandedFolders.includes(folder.id);
-            const inner = subs.map(folderHtml).join('') + notes.map(noteItemHtml).join('');
+            const inner = subs.map((f) => folderHtml(f, hid)).join('') + notes.map(noteItemHtml).join('');
             return `<div class="folder">
-                <div class="folder-header${folder.bgColor ? ' has-bg' : ''}" data-folder-id="${folder.id}" draggable="true" title="Drag to reorder, or onto another folder to put it inside"${folder.bgColor ? ` style="${bgStyle(folder.bgColor)}"` : ''}>
+                <div class="folder-header${folder.bgColor ? ' has-bg' : ''}${folder.hidden ? ' folder-hidden' : ''}" data-folder-id="${folder.id}" draggable="true" title="Drag to reorder, or onto another folder to put it inside"${folder.bgColor ? ` style="${bgStyle(folder.bgColor)}"` : ''}>
                     <span class="folder-chevron">${expanded ? '&#9662;' : '&#9656;'}</span>
-                    <span class="folder-name">${escapeHtml(folder.name || 'Folder')}</span>
+                    <span class="folder-name">${folder.hidden ? '<span class="hidden-mark" title="Hidden in the Explorer">📆</span> ' : ''}${escapeHtml(folder.name || 'Folder')}</span>
                     <button class="more-btn tree-menu-btn folder-more" data-folder-id="${folder.id}" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu">☰</button>
                     <button class="folder-add" data-folder-id="${folder.id}" title="New note in this folder">+</button>
                 </div>
                 ${expanded ? `<div class="folder-items">${inner || '<div class="folder-empty">Empty</div>'}</div>` : ''}
             </div>`;
         };
-        treeEl.innerHTML = childFolders(null).map(folderHtml).join('');
+        treeEl.innerHTML = childFolders(null).map((f) => folderHtml(f)).join('');
 
         if (onlyHidden && !treeEl.innerHTML.trim() && !unfiled.length) {
-            treeEl.innerHTML = '<div class="hidden-empty">No hidden notes. Use the 📆 button in a note to hide it from the Explorer.</div>';
+            treeEl.innerHTML = '<div class="hidden-empty">No hidden notes or folders. Use the 📆 button in a note, or "Hide in Explorer" in a folder\'s ☰ menu.</div>';
         }
         if (unfiled.length) {
             const expanded = onlyHidden || state.prefs.expandedFolders.includes('__none');
@@ -945,6 +948,17 @@ RemminStore.ready.then(() => {
         emptyEl.style.display = state.notes.length ? 'none' : 'block';
         makeTreeNotesDraggable();
         updateTrashButton();
+    }
+
+    // 📆 hide a folder (with everything in it) in the Explorer, like "Show ONLY in Calendar" for a note
+    function toggleFolderHidden(folder) {
+        folder.hidden = !folder.hidden;
+        if (!folder.hidden) delete folder.hidden;
+        folder.modifiedAt = new Date().toISOString();
+        saveFolders();
+        renderTree();
+        toast(folder.hidden ? `"${folder.name}" is hidden in the Explorer: click 📆 next to the search bar to see it`
+            : `"${folder.name}" is shown in the Explorer again`);
     }
 
     /* ---- folder drag & drop (reorder) ---- */
@@ -1209,6 +1223,7 @@ RemminStore.ready.then(() => {
                 { label: 'Move to…', icon: '↪', run: () => chooseFolderDestination(folder) },
                 { label: 'Rename', icon: '✏️', run: () => renameFolder(folder.id) },
                 { label: 'Background colour', icon: '🎨', run: () => pickBgColor(folderMore, folder.bgColor, (c) => setItemBg(folder, c, true)) },
+                { label: folder.hidden ? 'Show in Explorer again' : 'Hide in Explorer (the 📆 button shows it)', icon: '📆', run: () => toggleFolderHidden(folder) },
                 { label: 'Delete', icon: '🗑', danger: true, run: () => deleteFolder(folder.id) }
             ]);
             return;
@@ -12081,6 +12096,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Folders can be hidden in the Explorer too (folder ☰ menu → Hide in Explorer); the 📆 button shows them again',
         'New Remmin logo (tab icon and top of the Explorer) and new Hub pictures; Hub logos fade in 0.33 s',
         'Paste button in Text, Collage and Draw (handy on a phone); the Duplicate buttons are gone (Ctrl+D still works)',
         'Copy picture also copies the real picture (paste it in Paint, Discord…); Upload video file / Upload GIF file buttons; the option bar no longer covers a frame name',

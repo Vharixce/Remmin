@@ -812,25 +812,12 @@ RemminStore.ready.then(() => {
         return state.notes.reduce((m, n) => (typeof n.order === 'number' ? Math.min(m, n.order) : m), 0) - 1;
     }
 
+    // in the Explorer a note only shows its title
     function noteItemHtml(note) {
-        const preview = note.private ? 'Private note' : note.content.trim()
-            ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
-            : (hasImages(note) ? 'Image' : hasVoice(note) ? 'Voice note' : note.strokes.length ? 'Drawing'
-                : Object.values(note.grids || {}).some((g) => g && Object.keys(g).length) ? 'Grid'
-                : note.collage && note.collage.items && note.collage.items.length ? 'Collage'
-                : note.project && (note.project.columns || []).some((c) => c.cards && c.cards.length) ? 'Project' : 'Empty note');
-        let meta = '';
-        if (note.scheduledAt) {
-            const next = isRecurring(note) ? nextOccurrence(note, Date.now()) : null;
-            meta = isRecurring(note)
-                ? ` · ↻ ${next ? formatDateTime(toLocalIso(next)) : 'ended'}`
-                : ` · ${formatDateTime(note.scheduledAt)}`;
-        }
         const bg = note.bgColor ? ` style="${bgStyle(note.bgColor)}"` : '';
         return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}${note.bgColor ? ' has-bg' : ''}${note.calendarOnly ? ' calendar-only' : ''}" data-note-id="${note.id}"${bg}>
             <button class="more-btn tree-menu-btn note-more" data-note-id="${note.id}" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu">☰</button>
             <div class="note-item-title">${note.calendarOnly ? '<span class="hidden-mark" title="Only in Calendar (hidden in Explorer)">📆</span> ' : ''}${escapeHtml(note.title.trim() || 'Untitled')}</div>
-            <div class="note-item-meta">${escapeHtml(preview)}${meta}</div>
         </div>`;
     }
 
@@ -8909,12 +8896,21 @@ RemminStore.ready.then(() => {
     $('modeProject').addEventListener('click', () => setMode('project'));
 
     /* ---------------- Project mode: a board like GitHub Projects ----------------
-     * note.project = { columns: [{ id, name, cards: [{ id, text, people: [ids], depts: [ids] }] }],
-     *                  people: [{ id, name }], departments: [{ id, name, color }] }
+     * note.project = { columns: [{ id, name, cards: [{ id, text, people: [ids], depts: [ids], fields: { dropdownId: optionId } }] }],
+     *                  boxes: [{ id, kind: 'dept' | 'person' | 'select', name, items }] }
+     *   dept items: { id, name, color } · person items: { id, name } · select items (dropdowns): { id, name, options: [{ id, name }] }
+     *   (older boards had only people + departments: they become the boxes "Departments" and "People")
      * New boards start with To do / In progress / Review / Done (only saved once you change something). */
     const pjBoard = $('projectBoard');
     const pjCols = $('pjColumns');
-    const pj = { columns: [], people: [], departments: [], noteId: null, undo: [], redo: [], editing: null, sel: new Set() };
+    const pj = { columns: [], boxes: [], noteId: null, undo: [], redo: [], editing: null, sel: new Set(), openFields: new Set() };
+    const pjDefaultBoxes = (depts = [], people = []) => [
+        { id: uid(), kind: 'dept', name: 'Departments', items: depts },
+        { id: uid(), kind: 'person', name: 'People', items: people }
+    ];
+    const pjBoxesOf = (kind) => pj.boxes.filter((b) => b.kind === kind);
+    const pjAllOf = (kind) => pjBoxesOf(kind).flatMap((b) => b.items);
+    const pjBoxOfItem = (id) => pj.boxes.find((b) => b.items.some((x) => x.id === id));
     const PJ_DEFAULT = ['To do', 'In progress', 'Review', 'Done'];
     const pjDefault = () => PJ_DEFAULT.map((name) => ({ id: uid(), name, cards: [] }));
     const pjActive = () => state.prefs.mode === 'project' && state.prefs.activeTab !== 'calendar' && !!pj.noteId &&
@@ -8926,8 +8922,8 @@ RemminStore.ready.then(() => {
         pj.noteId = note ? note.id : null;
         const saved = note && note.project ? JSON.parse(JSON.stringify(note.project)) : {};
         pj.columns = Array.isArray(saved.columns) ? saved.columns : pjDefault();
-        pj.people = Array.isArray(saved.people) ? saved.people : [];
-        pj.departments = Array.isArray(saved.departments) ? saved.departments : [];
+        pj.boxes = Array.isArray(saved.boxes) ? saved.boxes
+            : pjDefaultBoxes(Array.isArray(saved.departments) ? saved.departments : [], Array.isArray(saved.people) ? saved.people : []);
         // the open eyes: only the items with these departments / people are shown (none open: everything)
         pj.filter = saved.filter && typeof saved.filter === 'object' ? { depts: saved.filter.depts || [], people: saved.filter.people || [] } : { depts: [], people: [] };
         pj.undo = []; pj.redo = []; pj.editing = null; pj.sel = new Set();
@@ -8936,13 +8932,13 @@ RemminStore.ready.then(() => {
     function pjSave() {
         const note = noteById(pj.noteId);
         if (!note || isPrivateLocked(note)) return;
-        note.project = JSON.parse(JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments, filter: pj.filter }));
+        note.project = JSON.parse(JSON.stringify({ columns: pj.columns, boxes: pj.boxes, filter: pj.filter }));
         touch(note);
     }
-    const pjState = () => JSON.stringify({ columns: pj.columns, people: pj.people, departments: pj.departments, filter: pj.filter });
+    const pjState = () => JSON.stringify({ columns: pj.columns, boxes: pj.boxes, filter: pj.filter });
     function pjRestore(text) {
         const v = JSON.parse(text);
-        pj.columns = v.columns; pj.people = v.people || []; pj.departments = v.departments || [];
+        pj.columns = v.columns; pj.boxes = v.boxes || pjDefaultBoxes();
         pj.filter = v.filter || { depts: [], people: [] };
     }
     function pjRecord() {
@@ -8971,12 +8967,21 @@ RemminStore.ready.then(() => {
 
     // new departments take these Draw / Grid colours in turn
     const DEPT_COLORS = ['#e11d1d', '#3b82f6', '#22c55e', '#f97316', '#8b5cf6', '#facc15', '#14b8a6', '#f472b6', '#22d3ee', '#d946ef'];
-    const pjDept = (id) => pj.departments.find((d) => d.id === id);
-    const pjPerson = (id) => pj.people.find((p) => p.id === id);
+    const pjDept = (id) => pjAllOf('dept').find((d) => d.id === id);
+    const pjPerson = (id) => pjAllOf('person').find((p) => p.id === id);
+    const pjField = (id) => pjAllOf('select').find((f) => f.id === id);
     const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
     function pjCardHtml(card) {
         const depts = (card.depts || []).map(pjDept).filter(Boolean);
         const people = (card.people || []).map(pjPerson).filter(Boolean);
+        const fields = Object.keys(card.fields || {}).map(pjField).filter(Boolean);
+        const fieldsHtml = fields.length ? `<div class="pj-card-fields">${fields.map((f) => `
+                            <span class="pj-field" data-field="${f.id}">
+                                <span class="pj-field-name">${escapeHtml(f.name)}</span>
+                                <select class="pj-field-select" aria-label="${escapeHtml(f.name)}"><option value="">—</option>${(f.options || []).map((o) =>
+                                    `<option value="${o.id}"${card.fields[f.id] === o.id ? ' selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}</select>
+                                <button type="button" class="pj-field-del" title="Take ${escapeHtml(f.name)} off this item" aria-label="Remove">✕</button>
+                            </span>`).join('')}</div>` : '';
         // one coloured stripe per department along the left edge
         const step = 100 / (depts.length || 1);
         const edge = depts.length ? `<span class="pj-edge" style="background:linear-gradient(to bottom, ${depts.map((d, i) =>
@@ -8984,13 +8989,14 @@ RemminStore.ready.then(() => {
         return `
                     <div class="pj-card${depts.length ? ' has-edge' : ''}${pj.sel.has(card.id) ? ' selected' : ''}" data-card="${card.id}">${edge}
                         <span class="pj-grip" title="Drag to move" aria-hidden="true">⠿</span>
-                        <div class="pj-card-text">${card.text ? escapeHtml(card.text) : '<span class="pj-untitled">Untitled</span>'}</div>
+                        <div class="pj-card-text">${card.text ? escapeHtml(card.text) : '<span class="pj-untitled">Untitled</span>'}</div>${fieldsHtml}
                         <div class="pj-card-foot">
                             ${depts.map((d) => `<span class="pj-chip" style="background:${escapeHtml(d.color)};color:${textOn(d.color)}">${escapeHtml(d.name)}</span>`).join('')}
                             ${people.map((p) => `<span class="pj-avatar" title="${escapeHtml(p.name)}">${escapeHtml(initials(p.name))}</span>`).join('')}
                             <span class="pj-assign">
                                 <button type="button" class="pj-assign-dept" title="Department" aria-label="Department"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="7.5" cy="7.5" r="1.6" fill="currentColor"/></svg></button>
                                 <button type="button" class="pj-assign-person" title="Assign a person" aria-label="Assign a person">👤</button>
+                                <button type="button" class="pj-assign-field" title="Add a dropdown" aria-label="Add a dropdown">▾</button>
                                 <button type="button" class="pj-done" title="Save this item (Enter)">Done</button>
                             </span>
                         </div>
@@ -9008,33 +9014,72 @@ RemminStore.ready.then(() => {
     const pjShown = (card) => !pjFiltering() || (card.depts || []).some(pjFilterDept) || (card.people || []).some(pjFilterPerson);
     const eyeBtn = (open, name) => `<button type="button" class="pj-eye${open ? ' on' : ''}" title="${open ? 'Stop showing only' : 'Show only'} the items of ${escapeHtml(name)}" aria-pressed="${open}">${open ? EYE : EYE_OFF}</button>`;
 
-    // the small lists on the right: departments (with a colour) and people
+    // the boxes on the right: departments (with a colour), people and dropdowns; add your own, rename them
+    const PJ_BOX_KINDS = { dept: ['Tags with a colour (like Departments)', '🏷'], person: ['People', '👤'], select: ['Dropdowns', '▾'] };
+    function pjItemRow(box, x) {
+        if (box.kind === 'dept') return `
+            <div class="pj-side-item" data-dept="${x.id}">
+                <button type="button" class="pj-dot" style="background:${escapeHtml(x.color)}" title="Change colour"></button>
+                <span class="pj-side-name" title="Double-click to rename · drag onto an item">${escapeHtml(x.name)}</span>
+                ${eyeBtn(pjFilterDept(x.id), x.name)}
+                <button type="button" class="pj-side-del" title="Remove">✕</button>
+            </div>`;
+        if (box.kind === 'person') return `
+            <div class="pj-side-item" data-person="${x.id}">
+                <span class="pj-avatar">${escapeHtml(initials(x.name))}</span>
+                <span class="pj-side-name" title="Double-click to rename · drag onto an item">${escapeHtml(x.name)}</span>
+                ${eyeBtn(pjFilterPerson(x.id), x.name)}
+                <button type="button" class="pj-side-del" title="Remove">✕</button>
+            </div>`;
+        const open = pj.openFields.has(x.id);
+        return `
+            <div class="pj-side-item pj-field-row" data-field="${x.id}">
+                <button type="button" class="pj-field-toggle" title="${open ? 'Hide' : 'Show'} the options" aria-expanded="${open}">${open ? '▾' : '▸'}</button>
+                <span class="pj-side-name" title="Double-click to rename · drag onto an item">${escapeHtml(x.name)}</span>
+                <span class="pj-field-count">${(x.options || []).length}</span>
+                <button type="button" class="pj-side-del" title="Remove">✕</button>
+            </div>${open ? `
+            <div class="pj-options" data-options-of="${x.id}">
+                ${(x.options || []).map((o) => `<div class="pj-option" data-option="${o.id}"><span class="pj-option-name" title="Double-click to rename">${escapeHtml(o.name)}</span><button type="button" class="pj-option-del" title="Remove">✕</button></div>`).join('')}
+                <form class="pj-side-form pj-option-form" data-field="${x.id}"><input type="text" maxlength="50" placeholder="+ Add option" autocomplete="off"></form>
+            </div>` : ''}`;
+    }
     function renderProjectSide() {
-        $('pjDeptList').innerHTML = pj.departments.length ? pj.departments.map((d) => `
-            <div class="pj-side-item" data-dept="${d.id}">
-                <button type="button" class="pj-dot" style="background:${escapeHtml(d.color)}" title="Change colour"></button>
-                <span class="pj-side-name" title="Double-click to rename">${escapeHtml(d.name)}</span>
-                ${eyeBtn(pjFilterDept(d.id), d.name)}
-                <button type="button" class="pj-side-del" title="Remove">✕</button>
-            </div>`).join('') : '<div class="pj-side-empty">e.g. Art department</div>';
-        $('pjPeopleList').innerHTML = pj.people.length ? pj.people.map((p) => `
-            <div class="pj-side-item" data-person="${p.id}">
-                <span class="pj-avatar">${escapeHtml(initials(p.name))}</span>
-                <span class="pj-side-name" title="Double-click to rename">${escapeHtml(p.name)}</span>
-                ${eyeBtn(pjFilterPerson(p.id), p.name)}
-                <button type="button" class="pj-side-del" title="Remove">✕</button>
-            </div>`).join('') : '<div class="pj-side-empty">Add the people who work on this</div>';
+        const empty = { dept: 'e.g. Art department', person: 'Add the people who work on this', select: 'e.g. Status (with the options To do, Busy, Ready)' };
+        const add = { dept: '+ Add', person: '+ Add person', select: '+ Add dropdown' };
+        // keep what is typed in the "+ Add" boxes
+        const typed = {};
+        $('pjSide').querySelectorAll('form[data-box] input, form.pj-option-form input').forEach((i) => { if (i.value) typed[i.closest('form').dataset.box || `o${i.closest('form').dataset.field}`] = i.value; });
+        const focused = document.activeElement && $('pjSide').contains(document.activeElement) && document.activeElement.closest('form');
+        const focusKey = focused ? focused.dataset.box || `o${focused.dataset.field}` : null;
+        $('pjSide').innerHTML = pj.boxes.map((b) => `
+            <div class="pj-box" data-box="${b.id}">
+                <div class="pj-box-head">
+                    <span class="pj-box-title" title="Double-click to rename">${escapeHtml(b.name)}</span>
+                    <button type="button" class="pj-box-menu" title="Box options" aria-label="Box options">⋯</button>
+                </div>
+                <div class="pj-side-list">${b.items.length ? b.items.map((x) => pjItemRow(b, x)).join('') : `<div class="pj-side-empty">${empty[b.kind]}</div>`}</div>
+                <form class="pj-side-form" data-box="${b.id}"><input type="text" maxlength="50" placeholder="${add[b.kind]}" autocomplete="off"></form>
+            </div>`).join('') + '<button type="button" class="pj-add-box" title="Add a box (tags, people or dropdowns)">+ Add box</button>';
+        $('pjSide').querySelectorAll('form').forEach((f) => {
+            const key = f.dataset.box || `o${f.dataset.field}`;
+            const input = f.querySelector('input');
+            if (typed[key]) input.value = typed[key];
+            if (key === focusKey) input.focus();
+        });
     }
 
     // assign a department / person to an item (click again to take it off)
     function pjAssignMenu(anchor, cardId, kind) {
         const f = pjFindCard(cardId);
         if (!f) return;
-        const list = kind === 'dept' ? pj.departments : pj.people;
+        const list = pjAllOf(kind);
         const field = kind === 'dept' ? 'depts' : 'people';
         if (!list.length) {
-            toast(kind === 'dept' ? 'Add a department in the Departments box on the right first' : 'Add a person in the People box on the right first');
-            $(kind === 'dept' ? 'pjDeptInput' : 'pjPersonInput').focus();
+            toast(kind === 'dept' ? 'Add a department in a box on the right first' : 'Add a person in a box on the right first');
+            const box = pjBoxesOf(kind)[0];
+            const input = box && $('pjSide').querySelector(`form[data-box="${box.id}"] input`);
+            if (input) input.focus();
             return;
         }
         const have = new Set(f.card[field] || []);
@@ -9070,45 +9115,153 @@ RemminStore.ready.then(() => {
             if (cardEl) cardEl.classList.remove('pj-menu-open');
         } }]));
     }
-    function pjAddSide(kind) {
-        const input = $(kind === 'dept' ? 'pjDeptInput' : 'pjPersonInput');
+    function pjAddSide(boxId, input) {
+        const box = pj.boxes.find((b) => b.id === boxId);
         const name = input.value.trim().slice(0, 50);
-        if (!name) return;
+        if (!box || !name) return;
         pjRecord();
-        if (kind === 'dept') pj.departments.push({ id: uid(), name, color: DEPT_COLORS[pj.departments.length % DEPT_COLORS.length] });
-        else pj.people.push({ id: uid(), name });
+        if (box.kind === 'dept') box.items.push({ id: uid(), name, color: DEPT_COLORS[pjAllOf('dept').length % DEPT_COLORS.length] });
+        else if (box.kind === 'select') { const f = { id: uid(), name, options: [] }; box.items.push(f); pj.openFields.add(f.id); }
+        else box.items.push({ id: uid(), name });
         input.value = '';
         renderProject();
         pjSave();
+        // a new dropdown: type its options right away
+        if (box.kind === 'select') { const i = $('pjSide').querySelector(`.pj-option-form[data-field="${box.items[box.items.length - 1].id}"] input`); if (i) i.focus(); }
+        else { const i = $('pjSide').querySelector(`form[data-box="${box.id}"] input`); if (i) i.focus(); }
     }
+    function pjAddOption(fieldId, input) {
+        const f = pjField(fieldId);
+        const name = input.value.trim().slice(0, 50);
+        if (!f || !name) return;
+        pjRecord();
+        (f.options = f.options || []).push({ id: uid(), name });
+        input.value = '';
+        renderProject();
+        pjSave();
+        const i = $('pjSide').querySelector(`.pj-option-form[data-field="${fieldId}"] input`);
+        if (i) i.focus();
+    }
+    const PJ_KIND_WORD = { dept: 'tag', person: 'person', select: 'dropdown' };
     async function pjRenameSide(kind, id) {
-        const item = kind === 'dept' ? pjDept(id) : pjPerson(id);
+        const item = kind === 'dept' ? pjDept(id) : kind === 'person' ? pjPerson(id) : pjField(id);
         if (!item) return;
-        const name = await askDialog({ title: kind === 'dept' ? 'Rename department' : 'Rename person', input: item.name, okLabel: 'Save' });
+        const name = await askDialog({ title: `Rename ${PJ_KIND_WORD[kind]}`, input: item.name, okLabel: 'Save' });
         if (!name || !name.trim() || name.trim() === item.name) return;
         pjRecord();
         item.name = name.trim().slice(0, 50);
         renderProject();
         pjSave();
     }
-    function pjRemoveSide(kind, id) {
+    async function pjRenameBox(boxId) {
+        const box = pj.boxes.find((b) => b.id === boxId);
+        if (!box) return;
+        const name = await askDialog({ title: 'Rename box', input: box.name, okLabel: 'Save' });
+        if (!name || !name.trim() || name.trim() === box.name) return;
         pjRecord();
-        const field = kind === 'dept' ? 'depts' : 'people';
-        if (kind === 'dept') pj.departments = pj.departments.filter((d) => d.id !== id);
-        else pj.people = pj.people.filter((p) => p.id !== id);
-        pj.columns.forEach((c) => c.cards.forEach((card) => { if (card[field]) card[field] = card[field].filter((x) => x !== id); }));
+        box.name = name.trim().slice(0, 40);
+        renderProject();
+        pjSave();
+    }
+    async function pjRenameOption(fieldId, optionId) {
+        const f = pjField(fieldId);
+        const o = f && (f.options || []).find((x) => x.id === optionId);
+        if (!o) return;
+        const name = await askDialog({ title: `Rename option of ${f.name}`, input: o.name, okLabel: 'Save' });
+        if (!name || !name.trim() || name.trim() === o.name) return;
+        pjRecord();
+        o.name = name.trim().slice(0, 50);
+        renderProject();
+        pjSave();
+    }
+    // take these tags / people / dropdowns off every item
+    function pjStripFromCards(ids) {
+        const gone = new Set(ids);
+        pj.columns.forEach((c) => c.cards.forEach((card) => {
+            ['depts', 'people'].forEach((k) => { if (card[k]) card[k] = card[k].filter((x) => !gone.has(x)); });
+            if (card.fields) { gone.forEach((id) => delete card.fields[id]); if (!Object.keys(card.fields).length) delete card.fields; }
+        }));
+        pj.filter = { depts: (pj.filter.depts || []).filter((x) => !gone.has(x)), people: (pj.filter.people || []).filter((x) => !gone.has(x)) };
+    }
+    function pjRemoveSide(kind, id) {
+        const box = pjBoxOfItem(id);
+        if (!box) return;
+        pjRecord();
+        box.items = box.items.filter((x) => x.id !== id);
+        pjStripFromCards([id]);
         renderProject();
         pjSave();
         toast('Removed (↶ to undo)');
     }
-    $('pjDeptForm').addEventListener('submit', (e) => { e.preventDefault(); pjAddSide('dept'); });
-    $('pjPersonForm').addEventListener('submit', (e) => { e.preventDefault(); pjAddSide('person'); });
-    $('pjSide').addEventListener('click', (e) => {
+    function pjRemoveOption(fieldId, optionId) {
+        const f = pjField(fieldId);
+        if (!f) return;
+        pjRecord();
+        f.options = (f.options || []).filter((o) => o.id !== optionId);
+        pj.columns.forEach((c) => c.cards.forEach((card) => { if (card.fields && card.fields[fieldId] === optionId) card.fields[fieldId] = ''; }));
+        renderProject();
+        pjSave();
+    }
+    async function pjAddBox() {
+        showMenu($('pjSide').querySelector('.pj-add-box'), 'Add a box with', Object.entries(PJ_BOX_KINDS).map(([kind, [label, icon]]) => ({
+            label, icon,
+            run: async () => {
+                const name = await askDialog({ title: 'New box', message: kind === 'select'
+                    ? 'A box with dropdowns: e.g. "Status" with the options To do / Busy / Ready. Give a dropdown to an item and choose its option there.'
+                    : 'Give the box a name.', input: kind === 'dept' ? 'Tags' : kind === 'person' ? 'People' : 'Dropdowns', okLabel: 'Add' });
+                if (!name || !name.trim()) return;
+                pjRecord();
+                pj.boxes.push({ id: uid(), kind, name: name.trim().slice(0, 40), items: [] });
+                renderProject();
+                pjSave();
+                const forms = $('pjSide').querySelectorAll('form[data-box] input');
+                if (forms.length) forms[forms.length - 1].focus();
+            }
+        })));
+    }
+    function pjBoxMenu(btn, boxId) {
+        const i = pj.boxes.findIndex((b) => b.id === boxId);
+        const box = pj.boxes[i];
+        if (!box) return;
+        const move = (d) => { pjRecord(); const [b] = pj.boxes.splice(i, 1); pj.boxes.splice(i + d, 0, b); renderProject(); pjSave(); };
+        const actions = [{ label: 'Rename', icon: '✎', run: () => pjRenameBox(boxId) }];
+        if (i > 0) actions.push({ label: 'Move up', icon: '↑', run: () => move(-1) });
+        if (i < pj.boxes.length - 1) actions.push({ label: 'Move down', icon: '↓', run: () => move(1) });
+        actions.push({ label: 'Delete box', icon: '🗑', danger: true, run: () => {
+            pjRecord();
+            pj.boxes.splice(i, 1);
+            pjStripFromCards(box.items.map((x) => x.id));
+            renderProject();
+            pjSave();
+            toast(`"${box.name}" deleted (↶ to undo)`);
+        } });
+        showMenu(btn, box.name, actions);
+    }
+    $('pjSide').addEventListener('submit', (e) => {
+        e.preventDefault();
         if (!pjActive()) return;
+        const form = e.target.closest('form');
+        const input = form && form.querySelector('input');
+        if (!input) return;
+        if (form.classList.contains('pj-option-form')) pjAddOption(form.dataset.field, input);
+        else pjAddSide(form.dataset.box, input);
+    });
+    $('pjSide').addEventListener('click', (e) => {
+        if (!pjActive() || Date.now() - pjTagDroppedAt < 400) return;
+        if (e.target.closest('.pj-add-box')) { pjAddBox(); return; }
+        const boxMenu = e.target.closest('.pj-box-menu');
+        if (boxMenu) { pjBoxMenu(boxMenu, boxMenu.closest('.pj-box').dataset.box); return; }
+        const opt = e.target.closest('.pj-option');
+        if (opt && e.target.closest('.pj-option-del')) { pjRemoveOption(opt.closest('.pj-options').dataset.optionsOf, opt.dataset.option); return; }
         const row = e.target.closest('.pj-side-item');
         if (!row) return;
-        const kind = row.dataset.dept ? 'dept' : 'person';
-        const id = row.dataset.dept || row.dataset.person;
+        const kind = row.dataset.dept ? 'dept' : row.dataset.person ? 'person' : 'select';
+        const id = row.dataset.dept || row.dataset.person || row.dataset.field;
+        if (kind === 'select' && !e.target.closest('.pj-side-del')) {
+            if (pj.openFields.has(id)) pj.openFields.delete(id); else pj.openFields.add(id);
+            renderProjectSide();
+            return;
+        }
         if (e.target.closest('.pj-side-del')) { pjRemoveSide(kind, id); return; }
         if (e.target.closest('.pj-eye')) {
             if (pj.editing && pj.editFinish) pj.editFinish(true);
@@ -9131,12 +9284,13 @@ RemminStore.ready.then(() => {
     });
     /* drag a department / person from the lists on the right onto an item (onto a selected item: all selected ones get it) */
     let pjTagDrag = null;
+    let pjTagDroppedAt = 0;
     $('pjSide').addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
         const row = e.target.closest('.pj-side-item');
         if (!row || e.target.closest('button, input')) return;
-        const kind = row.dataset.dept ? 'dept' : 'person';
-        const id = row.dataset.dept || row.dataset.person;
+        const kind = row.dataset.dept ? 'dept' : row.dataset.person ? 'person' : 'select';
+        const id = row.dataset.dept || row.dataset.person || row.dataset.field;
         pjTagDrag = { kind, id, row, x0: e.clientX, y0: e.clientY, ghost: null, over: null, pointerId: e.pointerId };
     });
     document.addEventListener('pointermove', (e) => {
@@ -9144,13 +9298,14 @@ RemminStore.ready.then(() => {
         if (!d || e.pointerId !== d.pointerId) return;
         if (!d.ghost) {
             if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6) return;
-            const item = d.kind === 'dept' ? pjDept(d.id) : pj.people.find((x) => x.id === d.id);
+            const item = d.kind === 'dept' ? pjDept(d.id) : d.kind === 'person' ? pjPerson(d.id) : pjField(d.id);
             if (!item) { pjTagDrag = null; return; }
             d.ghost = document.createElement('div');
             d.ghost.className = 'pj-tag-ghost';
             d.ghost.innerHTML = d.kind === 'dept'
                 ? `<span class="pj-dot small" style="background:${escapeHtml(item.color)}"></span>${escapeHtml(item.name)}`
-                : `<span class="pj-avatar">${escapeHtml(initials(item.name))}</span>${escapeHtml(item.name)}`;
+                : d.kind === 'person' ? `<span class="pj-avatar">${escapeHtml(initials(item.name))}</span>${escapeHtml(item.name)}`
+                    : `▾ ${escapeHtml(item.name)}`;
             document.body.appendChild(d.ghost);
             document.body.classList.add('pj-tag-dragging');
             window.getSelection()?.removeAllRanges();
@@ -9171,15 +9326,17 @@ RemminStore.ready.then(() => {
         if (!d || (e && e.pointerId !== d.pointerId)) return;
         pjTagDrag = null;
         if (!d.ghost) return; // a plain click
+        pjTagDroppedAt = Date.now();
         d.ghost.remove();
         document.body.classList.remove('pj-tag-dragging');
         const card = d.over;
         if (card) card.classList.remove('pj-tag-target');
         if (!card || !e || e.type === 'pointercancel') return;
         const cardId = card.dataset.card;
-        const field = d.kind === 'dept' ? 'depts' : 'people';
         const editing = pj.editing && pj.editing.kind === 'card' && pj.editing.id === cardId;
         const ids = !editing && pj.sel.has(cardId) && pj.sel.size > 1 ? [...pj.sel] : [cardId];
+        if (d.kind === 'select') { pjGiveField(ids, d.id, true, editing); return; }
+        const field = d.kind === 'dept' ? 'depts' : 'people';
         const missing = ids.filter((cid) => { const h = pjFindCard(cid); return h && !(h.card[field] || []).includes(d.id); });
         if (!missing.length) { toast(ids.length > 1 ? 'These items already have it' : 'This item already has it'); return; }
         if (!editing) pjRecord();
@@ -9190,11 +9347,57 @@ RemminStore.ready.then(() => {
     document.addEventListener('pointerup', pjTagDrop);
     document.addEventListener('pointercancel', pjTagDrop);
     $('pjSide').addEventListener('dblclick', (e) => {
+        if (!pjActive()) return;
+        const title = e.target.closest('.pj-box-title');
+        if (title) { pjRenameBox(title.closest('.pj-box').dataset.box); return; }
+        const opt = e.target.closest('.pj-option-name');
+        if (opt) { const o = opt.closest('.pj-option'); pjRenameOption(o.closest('.pj-options').dataset.optionsOf, o.dataset.option); return; }
         const row = e.target.closest('.pj-side-item');
-        if (row && e.target.closest('.pj-side-name') && pjActive()) pjRenameSide(row.dataset.dept ? 'dept' : 'person', row.dataset.dept || row.dataset.person);
+        if (row && e.target.closest('.pj-side-name')) pjRenameSide(row.dataset.dept ? 'dept' : row.dataset.person ? 'person' : 'select', row.dataset.dept || row.dataset.person || row.dataset.field);
+    });
+    // give a dropdown to items (or take it off); its option is chosen on the item itself
+    function pjGiveField(ids, fieldId, add, editing) {
+        const todo = ids.filter((cid) => { const h = pjFindCard(cid); return h && (add ? !(h.card.fields && fieldId in h.card.fields) : h.card.fields && fieldId in h.card.fields); });
+        if (!todo.length) { if (add) toast(ids.length > 1 ? 'These items already have it' : 'This item already has it'); return; }
+        if (!editing) pjRecord();
+        todo.forEach((cid) => {
+            const h = pjFindCard(cid);
+            if (add) h.card.fields = { ...(h.card.fields || {}), [fieldId]: '' };
+            else { delete h.card.fields[fieldId]; if (!Object.keys(h.card.fields).length) delete h.card.fields; }
+        });
+        renderProject();
+        if (!editing) pjSave();
+    }
+    function pjFieldMenu(anchor, cardId) {
+        const f = pjFindCard(cardId);
+        if (!f) return;
+        const list = pjAllOf('select');
+        if (!list.length) {
+            toast('Make a dropdown first: "+ Add box" on the right → Dropdowns');
+            return;
+        }
+        const editing = pj.editing && pj.editing.kind === 'card' && pj.editing.id === cardId;
+        const ids = !editing && pj.sel.has(cardId) && pj.sel.size > 1 ? [...pj.sel] : [cardId];
+        showMenu(anchor, 'Dropdown', list.map((x) => {
+            const has = !!(f.card.fields && x.id in f.card.fields);
+            return { label: `${has ? '✓ ' : ''}${x.name}`, icon: '▾', run: () => pjGiveField(ids, x.id, !has, editing) };
+        }));
+    }
+    // choosing an option on an item
+    pjBoard.addEventListener('change', (e) => {
+        const sel = e.target.closest('.pj-field-select');
+        if (!sel || !pjActive()) return;
+        const cardId = sel.closest('.pj-card').dataset.card;
+        const fieldId = sel.closest('.pj-field').dataset.field;
+        const h = pjFindCard(cardId);
+        if (!h) return;
+        const editing = pj.editing && pj.editing.kind === 'card' && pj.editing.id === cardId;
+        if (!editing) pjRecord();
+        h.card.fields = { ...(h.card.fields || {}), [fieldId]: sel.value };
+        if (!editing) { renderProject(); pjSave(); }
     });
     // keep the text box focused when clicking the assign buttons of the item being edited
-    pjBoard.addEventListener('pointerdown', (e) => { if (e.target.closest('.pj-assign')) e.preventDefault(); });
+    pjBoard.addEventListener('pointerdown', (e) => { if (e.target.closest('.pj-assign, .pj-field-del')) e.preventDefault(); });
 
     function renderProject() {
         pj.sel = new Set([...pj.sel].filter((id) => pjFindCard(id)));
@@ -9378,6 +9581,15 @@ RemminStore.ready.then(() => {
             return;
         }
         if (t.closest('.pj-done')) { if (pj.editFinish) pj.editFinish(true); return; }
+        const fieldDel = t.closest('.pj-field-del');
+        if (fieldDel) {
+            const cardId = fieldDel.closest('.pj-card').dataset.card;
+            pjGiveField([cardId], fieldDel.closest('.pj-field').dataset.field, false, pj.editing && pj.editing.kind === 'card' && pj.editing.id === cardId);
+            return;
+        }
+        if (t.closest('.pj-field')) return; // choosing an option
+        const fieldBtn = t.closest('.pj-assign-field');
+        if (fieldBtn) { pjFieldMenu(fieldBtn, fieldBtn.closest('.pj-card').dataset.card); return; }
         const assign = t.closest('.pj-assign-dept, .pj-assign-person');
         if (assign) {
             const id = assign.closest('.pj-card').dataset.card;
@@ -9475,7 +9687,7 @@ RemminStore.ready.then(() => {
     pjBoard.addEventListener('pointerdown', (e) => {
         if (!pjActive() || e.button !== 0) return;
         const card = e.target.closest('.pj-card');
-        if (!card || card.classList.contains('editing') || e.target.closest('.pj-card-del, .pj-assign')) return;
+        if (!card || card.classList.contains('editing') || e.target.closest('.pj-card-del, .pj-assign, .pj-field')) return;
         const grip = e.target.closest('.pj-grip');
         if (e.shiftKey && !grip) return; // Shift + click selects
         if (e.pointerType !== 'mouse' && !grip) return; // on a touch screen the card itself scrolls / opens
@@ -12097,6 +12309,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Project: add and rename boxes (departments, people) and Dropdown boxes (each dropdown has its own options; give it to an item and pick an option there); the Explorer only shows note titles',
         'Folder / note background colours: 12 colours plus black, grey and white',
         'Folders can be hidden in the Explorer too (folder ☰ menu → Hide in Explorer); the 📆 button shows them again',
         'New Remmin logo (tab icon and top of the Explorer) and new Hub pictures; Hub logos fade in 0.33 s',

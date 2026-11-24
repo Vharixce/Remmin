@@ -5398,6 +5398,36 @@ RemminStore.ready.then(() => {
 
     /* ---- repeat settings + overview inside the note's Scheduled card ---- */
 
+    // the day buttons (M T W T F S S): hold the mouse button / finger and slide over them to select (or unselect) several
+    function dragSelectDays(box) {
+        let paint = null, pointerId = null;
+        const set = (input, on) => {
+            if (input.checked === on) return;
+            input.checked = on;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        box.addEventListener('pointerdown', (e) => {
+            const chip = e.target.closest('.weekday-chip');
+            if (!chip || (e.pointerType === 'mouse' && e.button !== 0)) return;
+            e.preventDefault();
+            const input = chip.querySelector('input');
+            paint = !input.checked;
+            pointerId = e.pointerId;
+            set(input, paint);
+        });
+        document.addEventListener('pointermove', (e) => {
+            if (paint === null || e.pointerId !== pointerId) return;
+            const el = document.elementFromPoint(e.clientX, e.clientY);
+            const chip = el && el.closest && el.closest('.weekday-chip');
+            if (chip && box.contains(chip)) set(chip.querySelector('input'), paint);
+        });
+        const stop = (e) => { if (e.pointerId === pointerId) { paint = null; pointerId = null; } };
+        document.addEventListener('pointerup', stop);
+        document.addEventListener('pointercancel', stop);
+        // the press already switched the day: no second switch from the click (the keyboard still works)
+        box.addEventListener('click', (e) => { if (e.detail > 0 && e.target.closest('.weekday-chip')) e.preventDefault(); });
+    }
+
     $('edWeekdays').innerHTML = WEEKDAY_SHORT.map((letter, index) =>
         `<label class="weekday-chip" title="${WEEKDAY_FULL[index]}"><input type="checkbox" value="${index}" aria-label="${WEEKDAY_FULL[index]}"><span>${letter}</span></label>`
     ).join('');
@@ -5515,6 +5545,7 @@ RemminStore.ready.then(() => {
 
     $('edRepeatMode').addEventListener('change', scheduleChanged);
     $('edWeekdays').addEventListener('change', scheduleChanged);
+    dragSelectDays($('edWeekdays'));
     $('edRepeatEnd').addEventListener('change', scheduleChanged);
     $('edSkipped').addEventListener('click', (e) => {
         const btn = e.target.closest('.skipped-remove');
@@ -7183,6 +7214,7 @@ RemminStore.ready.then(() => {
     });
     $('planFromTreeDate').addEventListener('change', () => refreshRepeatOptions());
     $('weekdayOptions').addEventListener('change', () => refreshRepeatOptions());
+    dragSelectDays($('weekdayOptions'));
 
     function openPlanFromTreeModal(noteId, day) {
         const note = noteById(noteId);
@@ -9291,6 +9323,11 @@ RemminStore.ready.then(() => {
     let pjTagDroppedAt = 0;
     $('pjSide').addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
+        const opt = e.target.closest('.pj-option');
+        if (opt && !e.target.closest('button, input')) {
+            pjTagDrag = { kind: 'option', id: opt.dataset.option, fieldId: opt.closest('.pj-options').dataset.optionsOf, row: opt, x0: e.clientX, y0: e.clientY, ghost: null, over: null, sort: null, pointerId: e.pointerId };
+            return;
+        }
         const row = e.target.closest('.pj-side-item');
         if (!row || e.target.closest('button, input')) return;
         const kind = row.dataset.dept ? 'dept' : row.dataset.person ? 'person' : 'select';
@@ -9302,14 +9339,15 @@ RemminStore.ready.then(() => {
         if (!d || e.pointerId !== d.pointerId) return;
         if (!d.ghost) {
             if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6) return;
-            const item = d.kind === 'dept' ? pjDept(d.id) : d.kind === 'person' ? pjPerson(d.id) : pjField(d.id);
+            const item = d.kind === 'dept' ? pjDept(d.id) : d.kind === 'person' ? pjPerson(d.id) : d.kind === 'option'
+                ? ((pjField(d.fieldId) || {}).options || []).find((o) => o.id === d.id) : pjField(d.id);
             if (!item) { pjTagDrag = null; return; }
             d.ghost = document.createElement('div');
             d.ghost.className = 'pj-tag-ghost';
             d.ghost.innerHTML = d.kind === 'dept'
                 ? `<span class="pj-dot small" style="background:${escapeHtml(item.color)}"></span>${escapeHtml(item.name)}`
                 : d.kind === 'person' ? `<span class="pj-avatar">${escapeHtml(initials(item.name))}</span>${escapeHtml(item.name)}`
-                    : `▾ ${escapeHtml(item.name)}`;
+                    : d.kind === 'option' ? escapeHtml(item.name) : `▾ ${escapeHtml(item.name)}`;
             document.body.appendChild(d.ghost);
             document.body.classList.add('pj-tag-dragging');
             window.getSelection()?.removeAllRanges();
@@ -9318,13 +9356,38 @@ RemminStore.ready.then(() => {
         d.ghost.style.left = `${e.clientX + 12}px`;
         d.ghost.style.top = `${e.clientY + 10}px`;
         const el = document.elementFromPoint(e.clientX, e.clientY);
-        const card = el && el.closest && el.closest('#pjColumns .pj-card');
+        // over another row of the same box (or the same dropdown): change the order
+        const sideRow = el && el.closest && (d.kind === 'option' ? el.closest('.pj-option') : el.closest('#pjSide .pj-side-item'));
+        const same = sideRow && sideRow !== d.row && (d.kind === 'option' ? sideRow.closest('.pj-options') === d.row.closest('.pj-options')
+            : sideRow.closest('.pj-box') === d.row.closest('.pj-box'));
+        if (d.sort) d.sort.row.classList.remove('pj-sort-before', 'pj-sort-after');
+        d.sort = null;
+        if (same) {
+            const r = sideRow.getBoundingClientRect();
+            d.sort = { row: sideRow, after: e.clientY > r.top + r.height / 2 };
+            sideRow.classList.add(d.sort.after ? 'pj-sort-after' : 'pj-sort-before');
+        }
+        const card = d.kind === 'option' ? null : el && el.closest && el.closest('#pjColumns .pj-card');
         if (d.over !== card) {
             if (d.over) d.over.classList.remove('pj-tag-target');
             d.over = card || null;
             if (card) card.classList.add('pj-tag-target');
         }
     }, { passive: false });
+    // move a row of a box (or an option of a dropdown) before / after another one
+    function pjSortSide(d) {
+        const list = d.kind === 'option' ? (pjField(d.fieldId) || {}).options : (pjBoxOfItem(d.id) || {}).items;
+        const targetId = d.kind === 'option' ? d.sort.row.dataset.option : d.sort.row.dataset.dept || d.sort.row.dataset.person || d.sort.row.dataset.field;
+        if (!list) return;
+        const from = list.findIndex((x) => x.id === d.id);
+        if (from < 0 || !list.some((x) => x.id === targetId)) return;
+        pjRecord();
+        const [moved] = list.splice(from, 1);
+        const to = list.findIndex((x) => x.id === targetId) + (d.sort.after ? 1 : 0);
+        list.splice(to, 0, moved);
+        renderProject();
+        pjSave();
+    }
     const pjTagDrop = (e) => {
         const d = pjTagDrag;
         if (!d || (e && e.pointerId !== d.pointerId)) return;
@@ -9335,6 +9398,8 @@ RemminStore.ready.then(() => {
         document.body.classList.remove('pj-tag-dragging');
         const card = d.over;
         if (card) card.classList.remove('pj-tag-target');
+        if (d.sort) d.sort.row.classList.remove('pj-sort-before', 'pj-sort-after');
+        if (d.sort && e && e.type !== 'pointercancel') { pjSortSide(d); return; }
         if (!card || !e || e.type === 'pointercancel') return;
         const cardId = card.dataset.card;
         const editing = pj.editing && pj.editing.kind === 'card' && pj.editing.id === cardId;
@@ -12313,6 +12378,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Project: drag things in the boxes on the right (and the options of a dropdown) to change their order; Repeat on: hold the mouse button and slide over the days to select them',
         'Explorer: the ☰ button of a note is centred vertically',
         'Project: rename a dropdown (double-click its name or ✎)',
         'Project: add and rename boxes (departments, people) and Dropdown boxes (each dropdown has its own options; give it to an item and pick an option there); the Explorer only shows note titles',

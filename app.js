@@ -9037,6 +9037,7 @@ RemminStore.ready.then(() => {
                 <button type="button" class="pj-field-toggle" title="${open ? 'Hide' : 'Show'} the options" aria-expanded="${open}">${open ? '▾' : '▸'}</button>
                 <span class="pj-side-name" title="Double-click to rename · drag onto an item">${escapeHtml(x.name)}</span>
                 <span class="pj-field-count">${(x.options || []).length}</span>
+                <button type="button" class="pj-field-rename" title="Rename" aria-label="Rename">✎</button>
                 <button type="button" class="pj-side-del" title="Remove">✕</button>
             </div>${open ? `
             <div class="pj-options" data-options-of="${x.id}">
@@ -9257,6 +9258,9 @@ RemminStore.ready.then(() => {
         if (!row) return;
         const kind = row.dataset.dept ? 'dept' : row.dataset.person ? 'person' : 'select';
         const id = row.dataset.dept || row.dataset.person || row.dataset.field;
+        if (kind === 'select' && e.target.closest('.pj-field-rename')) { pjRenameSide('select', id); return; }
+        // the name: double-click renames it (a single click doesn't fold it open / closed)
+        if (kind === 'select' && e.target.closest('.pj-side-name')) return;
         if (kind === 'select' && !e.target.closest('.pj-side-del')) {
             if (pj.openFields.has(id)) pj.openFields.delete(id); else pj.openFields.add(id);
             renderProjectSide();
@@ -12309,6 +12313,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Project: rename a dropdown (double-click its name or ✎)',
         'Project: add and rename boxes (departments, people) and Dropdown boxes (each dropdown has its own options; give it to an item and pick an option there); the Explorer only shows note titles',
         'Folder / note background colours: 12 colours plus black, grey and white',
         'Folders can be hidden in the Explorer too (folder ☰ menu → Hide in Explorer); the 📆 button shows them again',

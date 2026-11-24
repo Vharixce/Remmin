@@ -2488,3 +2488,7 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .pj-field-del:hover { color: #ef4444; }
 @media (hover: none) { .pj-field-del { opacity: .55; } }
 .pj-assign .pj-assign-field { font-size: 13px; color: #f3f4f6; }
+.pj-field-rename { background: none; border: 0; color: var(--text-dim); cursor: pointer; font-size: 11px; padding: 2px 3px; border-radius: 4px; opacity: 0; }
+.pj-side-item:hover .pj-field-rename { opacity: 1; }
+.pj-field-rename:hover { color: var(--text); }
+@media (hover: none) { .pj-field-rename { opacity: .55; } }

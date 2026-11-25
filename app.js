@@ -5380,6 +5380,7 @@ RemminStore.ready.then(() => {
     });
 
     function updateScheduleUi(note) {
+        updateAlarmSoundLabel(note);
         const body = $('scheduleBody');
         if (!note) {
             $('scheduleDate').value = '';
@@ -5625,21 +5626,30 @@ RemminStore.ready.then(() => {
     $('scheduleDate').addEventListener('change', scheduleChanged);
     $('scheduleTime').addEventListener('change', scheduleChanged);
     $('alarmEnabled').addEventListener('change', scheduleChanged);
+    // what the alarm of a note plays: its own sound, the default custom sound, or the standard sound
+    const noteOwnSound = (note) => !!(note && note.alarmSound && (!isMediaRef(note.alarmSound) || mediaData(note.alarmSound)));
+    function alarmSoundText(note) {
+        if (noteOwnSound(note)) return `🎵 ${note.alarmSoundName || 'Audio'}`;
+        return RemminStore.get(ALARM_SOUND_KEY) ? '🎵 Custom sound (all notes)' : '🔔 Standard sound';
+    }
     function updateAlarmSoundLabel(note) {
         const el = $('edAlarmSound');
         if (!el) return;
-        const has = !!(note && note.alarmSound && (!isMediaRef(note.alarmSound) || mediaData(note.alarmSound)));
-        el.hidden = !has;
-        if (has) el.querySelector('.alarm-sound-name').textContent = `🎵 ${note.alarmSoundName || 'Audio'}`;
+        el.querySelector('.alarm-sound-name').textContent = alarmSoundText(note);
+        el.querySelector('.alarm-sound-del').hidden = !noteOwnSound(note) && !RemminStore.get(ALARM_SOUND_KEY);
     }
     $('edAlarmSound').addEventListener('click', (e) => {
         const note = noteById(state.currentNoteId);
         if (!note) return;
-        if (e.target.closest('.alarm-sound-del')) { setNoteAlarmSound(note, '', ''); return; }
-        // listen to it
-        const data = isMediaRef(note.alarmSound) ? mediaData(note.alarmSound) : note.alarmSound;
-        if (data) { const a = new Audio(data); a.play().catch(() => {}); setTimeout(() => a.pause(), 6000); }
+        if (e.target.closest('.alarm-sound-del')) {
+            // back to the standard sound: this note's own sound, else the custom sound for all notes
+            if (noteOwnSound(note)) setNoteAlarmSound(note, '', '');
+            else { RemminStore.remove(ALARM_SOUND_KEY); settingsChanged(); updateAlarmSoundLabel(note); toast('Alarms play the standard sound again'); }
+            return;
+        }
+        openAlarmSoundSettings();
     });
+    $('edAlarmSound').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAlarmSoundSettings(); } });
 
     /* ---- email notification (sent by the GitHub Action, see EMAIL-SETUP.md) ---- */
     const EMAIL_KEY = 'remmin.emailAddress.v1';
@@ -12765,6 +12775,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Alarm sound in one place: the button next to Alarm shows the sound, click it to change / test it, ✕ for the standard sound',
         'Video: ⏰ "Use its sound as alarm sound of this note"',
         'Storage overview: why offline is bigger than GitHub, and a list of every file on GitHub with the notes that use it (or that it is no longer used)',
         'Audio: ⏰ "Use as alarm sound of this note" in its options; the Scheduled card shows which sound the alarm plays',
@@ -13180,8 +13191,7 @@ RemminStore.ready.then(() => {
         if (typeof set.email === 'string') { if (set.email) RemminStore.set(EMAIL_ADDRESS_KEY, set.email); else RemminStore.remove(EMAIL_ADDRESS_KEY); }
         if (typeof set.alarmSound === 'string' && set.alarmSound !== (RemminStore.get(ALARM_SOUND_KEY) || '')) {
             if (set.alarmSound) RemminStore.set(ALARM_SOUND_KEY, set.alarmSound); else RemminStore.remove(ALARM_SOUND_KEY);
-            const status = $('alarmSoundStatus');
-            if (status) status.textContent = set.alarmSound ? 'Using custom sound (synced)' : 'Using standard sound';
+            if (typeof refreshAlarmSoundModal === 'function') refreshAlarmSoundModal();
         }
         state.prefs.settingsAt = set.at || state.prefs.settingsAt || null;
         savePrefs();
@@ -14149,25 +14159,62 @@ RemminStore.ready.then(() => {
         }
     }
 
-    $('alarmSoundFile').addEventListener('change', (e) => {
-        const file = e.target.files && e.target.files[0]; if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-            try {
-                RemminStore.set('remmin.alarmSound.v1', reader.result);
-                settingsChanged();
-                $('alarmSoundStatus').textContent = `Using custom sound: ${file.name}`;
-                toast('Custom alarm sound saved');
-            } catch (_) { toast('This sound file is too large to store in browser storage'); }
-        };
-        reader.readAsDataURL(file);
+    // Alarm Sound Settings (opened from the sound button next to "Alarm" of a note)
+    function refreshAlarmSoundModal() {
+        const note = noteById(state.currentNoteId);
+        $('alarmSoundStatus').textContent = `This note plays: ${alarmSoundText(note).replace(/^\S+ /, '')}`;
+        $('standardAlarmSoundBtn').disabled = !noteOwnSound(note) && !RemminStore.get(ALARM_SOUND_KEY);
+        const custom = !!RemminStore.get(ALARM_SOUND_KEY);
+        $('alarmDefaultStatus').textContent = custom ? 'Custom sound' : 'Standard sound';
+        $('alarmDefaultReset').hidden = !custom;
+        updateAlarmSoundLabel(note);
+    }
+    function openAlarmSoundSettings() {
+        refreshAlarmSoundModal();
+        $('testAlarmSoundBtn').textContent = 'Test sound';
+        $('alarmSoundModal').classList.add('active');
+    }
+    async function readAlarmFile(input) {
+        const file = input.files && input.files[0];
+        input.value = '';
+        if (!file) return null;
+        if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) { toast('Choose an audio file (MP3, M4A, WAV…)'); return null; }
+        try {
+            const src = file.type.startsWith('audio/') ? await audioFileToStorable(file) : await blobToDataUrl(file);
+            if (!src) return null;
+            if (src.length > VOICE_MAX_CHARS) { toast('This file is too big for an alarm sound (max 25 MB)'); return null; }
+            return { src, name: file.name.replace(/\.[^.]+$/, '') };
+        } catch (_) { toast(`Could not use ${file.name}`); return null; }
+    }
+    // a sound file for this note (stored once, like the audio in notes, and synced)
+    $('alarmSoundFile').addEventListener('change', async (e) => {
+        const note = noteById(state.currentNoteId);
+        const f = await readAlarmFile(e.target);
+        if (!f || !note) return;
+        setNoteAlarmSound(note, mediaIdFor(f.src), f.name);
+        refreshAlarmSoundModal();
     });
     $('standardAlarmSoundBtn').addEventListener('click', () => {
-        RemminStore.remove('remmin.alarmSound.v1');
+        const note = noteById(state.currentNoteId);
+        if (noteOwnSound(note)) setNoteAlarmSound(note, '', '');
+        else if (RemminStore.get(ALARM_SOUND_KEY)) { RemminStore.remove(ALARM_SOUND_KEY); settingsChanged(); toast('Alarms play the standard sound again'); }
+        refreshAlarmSoundModal();
+    });
+    // the sound for every note that has no sound of its own
+    $('alarmDefaultFile').addEventListener('change', async (e) => {
+        const f = await readAlarmFile(e.target);
+        if (!f) return;
+        try {
+            RemminStore.set(ALARM_SOUND_KEY, f.src);
+            settingsChanged();
+            toast(`"${f.name}" is now the alarm sound of notes without their own sound`);
+        } catch (_) { toast('This sound file is too large to store'); }
+        refreshAlarmSoundModal();
+    });
+    $('alarmDefaultReset').addEventListener('click', () => {
+        RemminStore.remove(ALARM_SOUND_KEY);
         settingsChanged();
-        $('alarmSoundFile').value = '';
-        $('alarmSoundStatus').textContent = 'Using standard sound';
-        toast('Standard alarm sound selected');
+        refreshAlarmSoundModal();
     });
     $('testAlarmSoundBtn').addEventListener('click', () => {
         if (alarmAudio || alarmMaster) {
@@ -14175,14 +14222,9 @@ RemminStore.ready.then(() => {
             $('testAlarmSoundBtn').textContent = 'Test sound';
             return;
         }
-        playAlarmSound();
+        playAlarmSound(noteById(state.currentNoteId));
         $('testAlarmSoundBtn').textContent = 'Stop test';
         setTimeout(() => { $('testAlarmSoundBtn').textContent = 'Test sound'; }, ALARM_MAX_SOUND_MS);
-    });
-    $('openAlarmSoundSettings').addEventListener('click', () => {
-        const customSound = RemminStore.get('remmin.alarmSound.v1');
-        $('alarmSoundStatus').textContent = customSound ? 'Using a custom sound' : 'Using standard sound';
-        $('alarmSoundModal').classList.add('active');
     });
     $('alarmSoundClose').addEventListener('click', closeModals);
     $('alarmSoundBackdrop').addEventListener('click', closeModals);

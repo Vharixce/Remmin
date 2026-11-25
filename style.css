@@ -2511,3 +2511,10 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .so-gh-kind { flex: none; width: 82px; color: var(--text-dim); }
 .so-gh-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .so-unused { color: #fbbf24; }
+.alarm-sound { gap: 6px; }
+.alarm-sound:hover { border-color: var(--primary); }
+.alarm-sound-del[hidden] { display: none; }
+.alarm-sound-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.alarm-sound-row label.btn { cursor: pointer; }
+.alarm-sound-default { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.alarm-sound-default-status { font-size: 13px; color: var(--text-dim); margin-right: auto; }

@@ -146,7 +146,7 @@
                             </div>
                             <div class="check-row-group">
                                 <label class="check-row"><input type="checkbox" id="alarmEnabled"> Alarm</label>
-                                <span class="alarm-sound" id="edAlarmSound" hidden title="The alarm of this note plays this audio (click to listen)"><span class="alarm-sound-name"></span><button type="button" class="alarm-sound-del" title="Use the standard sound again" aria-label="Use the standard sound again">✕</button></span>
+                                <span class="alarm-sound" id="edAlarmSound" role="button" tabindex="0" title="Alarm sound: click to change or test it"><span class="alarm-sound-name">🔔 Standard sound</span><button type="button" class="alarm-sound-del" title="Use the standard sound again" aria-label="Use the standard sound again" hidden>✕</button></span>
                                 <span class="check-row email-row">
                                     <input type="checkbox" id="emailEnabled" aria-label="Send Email Notification">
                                     <button type="button" class="link-btn" id="emailSettingsLink" title="Set the email address">Send Email Notification</button>
@@ -181,9 +181,6 @@
                                 <div class="note-colors" id="noteColors"></div>
                             </div>
                             <div class="schedule-summary" id="scheduleSummary"></div>
-                            <div class="schedule-buttons">
-                                <button class="btn alarm-sound-settings-btn" id="openAlarmSoundSettings" type="button">Alarm Sound Settings</button>
-                            </div>
                         </div>
                     </div>
 
@@ -494,11 +491,22 @@
                 <div>Alarm Sound Settings</div>
                 <button class="icon-btn" id="alarmSoundClose" title="Close">&times;</button>
             </div>
-            <p class="alarm-sound-description">The standard alarm sound is active by default. Choose a custom MP3, MP4 audio, or WAV file if you prefer.</p>
-            <div class="alarm-sound-status" id="alarmSoundStatus">Using standard sound</div>
-            <label class="plan-row" for="alarmSoundFile">Custom sound</label>
-            <input type="file" id="alarmSoundFile" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,.mp3,.mp4,.wav">
-            <button class="btn" id="standardAlarmSoundBtn" type="button">Use standard sound</button>
+            <div class="alarm-sound-status" id="alarmSoundStatus">This note plays: the standard sound</div>
+            <div class="alarm-sound-row">
+                <label class="btn" for="alarmSoundFile">Choose a sound file…</label>
+                <input type="file" id="alarmSoundFile" accept="audio/*,.mp3,.mp4,.m4a,.wav,.ogg" hidden>
+                <button class="btn" id="standardAlarmSoundBtn" type="button">Use standard sound</button>
+            </div>
+            <p class="alarm-sound-description">Tip: you can also click an audio file or video in this note and choose ⏰ to use its sound.</p>
+            <div class="alarm-sound-default">
+                <div class="advanced-label">For notes without their own sound</div>
+                <div class="alarm-sound-row">
+                    <span class="alarm-sound-default-status" id="alarmDefaultStatus">Standard sound</span>
+                    <label class="btn" for="alarmDefaultFile">Choose…</label>
+                    <input type="file" id="alarmDefaultFile" accept="audio/*,.mp3,.mp4,.m4a,.wav,.ogg" hidden>
+                    <button class="btn" id="alarmDefaultReset" type="button" hidden>Standard</button>
+                </div>
+            </div>
             <button class="btn" id="testAlarmSoundBtn" type="button">Test sound</button>
         </div>
     </div>

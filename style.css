@@ -2496,3 +2496,7 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .pj-side-item, .pj-option { cursor: grab; }
 .pj-side-item.pj-sort-before, .pj-option.pj-sort-before { box-shadow: inset 0 2px 0 var(--primary); }
 .pj-side-item.pj-sort-after, .pj-option.pj-sort-after { box-shadow: inset 0 -2px 0 var(--primary); }
+.pj-marquee { position: fixed; z-index: 60; border: 1px solid var(--primary); background: rgba(124, 111, 240, .12); border-radius: 3px; pointer-events: none; }
+.pj-columns { user-select: none; -webkit-user-select: none; }
+.pj-columns textarea, .pj-columns input { user-select: text; -webkit-user-select: text; }
+.pj-bar #pjPaste { white-space: nowrap; width: auto; padding: 0 10px; flex: none; }

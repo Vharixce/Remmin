@@ -2821,7 +2821,7 @@ RemminStore.ready.then(() => {
             const count = {};
             list.forEach((a) => { count[a.icon || ''] = (count[a.icon || ''] || 0) + 1; });
             acts.innerHTML = list.map((a, i) => {
-                const words = !a.icon || count[a.icon] > 1 ? `<span class="ctx-txt">${escapeHtml(a.label.replace(/\s*\(.*?\)/g, '').replace(/…/g, '').replace(/^Size /, '').trim())}</span>` : '';
+                const words = a.text ? `<span class="ctx-txt">${escapeHtml(a.text)}</span>` : !a.icon || count[a.icon] > 1 ? `<span class="ctx-txt">${escapeHtml(a.label.replace(/\s*\(.*?\)/g, '').replace(/…/g, '').replace(/^Size /, '').trim())}</span>` : '';
                 return `<button type="button" class="tool-btn ctx-act${a.danger ? ' danger' : ''}" data-ai="${i}" title="${escapeHtml(a.label)}" aria-label="${escapeHtml(a.label)}">${a.icon ? `<span class="ctx-ico">${a.icon}</span>` : ''}${words}</button>`;
             }).join('');
         }
@@ -9471,10 +9471,10 @@ RemminStore.ready.then(() => {
     function renderProject() {
         pj.sel = new Set([...pj.sel].filter((id) => pjFindCard(id)));
         $('pjSelCount').textContent = pj.sel.size > 1 ? `${pj.sel.size} items selected · Delete to remove · drag to move them together` : '';
+        requestAnimationFrame(updatePjCtx);
         renderProjectSide();
         $('pjUndo').disabled = !pj.undo.length;
         $('pjRedo').disabled = !pj.redo.length;
-        $('pjCopy').disabled = !pj.sel.size;
         pjCols.innerHTML = pj.columns.map((col) => `
             <div class="pj-col" data-col="${col.id}">
                 <div class="pj-col-head">
@@ -9579,6 +9579,7 @@ RemminStore.ready.then(() => {
         if (pj.editing && pj.editFinish) pj.editFinish(true); // save the item you were typing in first
         const before = pjState();
         const card = { id: uid(), text: '' };
+        pj.sel = new Set();
         col.cards.push(card);
         pj.editing = { kind: 'card', id: card.id, isNew: true, orig: null, before, draft: null };
         renderProject();
@@ -9612,7 +9613,6 @@ RemminStore.ready.then(() => {
         const t = e.target;
         if (t.closest('#pjUndo')) { pjUndoRedo(true); return; }
         if (t.closest('#pjRedo')) { pjUndoRedo(false); return; }
-        if (t.closest('#pjCopy')) { pjCopyCards([...pj.sel], false, true); return; }
         if (t.closest('#pjPaste')) { pjPasteButton(); return; }
         const inCol = t.closest('.pj-col');
         if (inCol) pj.lastCol = inCol.dataset.col;
@@ -9684,7 +9684,7 @@ RemminStore.ready.then(() => {
             pjEditCard(card.dataset.card);
             return;
         }
-        if (!card && pj.sel.size && !t.closest('button, input')) { pj.sel = new Set(); renderProject(); }
+        if (!card && pj.sel.size && !t.closest('button, input, .ctx-bar')) { pj.sel = new Set(); renderProject(); }
     });
     pjBoard.addEventListener('dblclick', (e) => {
         const name = e.target.closest('.pj-col-name');
@@ -9820,14 +9820,209 @@ RemminStore.ready.then(() => {
         menuAt(e.clientX, e.clientY, ids.length > 1 ? `${ids.length} items` : 'Item', actions);
     });
 
+    /* ---- select items by dragging a box around them (mouse), like in Collage and Draw ---- */
+    let pjMarq = null;
+    pjCtx = makeCtxBar($('projectBoard').querySelector('.pj-bar'));
+    pjBoard.addEventListener('pointerdown', (e) => {
+        if (!pjActive() || e.button !== 0 || e.pointerType !== 'mouse') return;
+        if (!e.target.closest('#pjColumns') || e.target.closest('.pj-card, button, input, textarea, select, .pj-col-name, .pj-col-head')) return;
+        e.preventDefault();
+        pjMarq = { x0: e.clientX, y0: e.clientY, base: e.shiftKey ? new Set(pj.sel) : new Set(), el: null, pointerId: e.pointerId };
+    });
+    document.addEventListener('pointermove', (e) => {
+        const m = pjMarq;
+        if (!m || e.pointerId !== m.pointerId) return;
+        if (!m.el) {
+            if (Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < 5) return;
+            m.el = document.createElement('div');
+            m.el.className = 'pj-marquee';
+            document.body.appendChild(m.el);
+        }
+        const x1 = Math.min(m.x0, e.clientX), y1 = Math.min(m.y0, e.clientY), x2 = Math.max(m.x0, e.clientX), y2 = Math.max(m.y0, e.clientY);
+        Object.assign(m.el.style, { left: `${x1}px`, top: `${y1}px`, width: `${x2 - x1}px`, height: `${y2 - y1}px` });
+        const sel = new Set(m.base);
+        pjCols.querySelectorAll('.pj-card').forEach((c) => {
+            const r = c.getBoundingClientRect();
+            const hit = r.right > x1 && r.left < x2 && r.bottom > y1 && r.top < y2;
+            if (hit) sel.add(c.dataset.card);
+            c.classList.toggle('selected', sel.has(c.dataset.card));
+        });
+        pj.sel = sel;
+        updatePjCtx();
+    });
+    const pjMarqEnd = (e) => {
+        const m = pjMarq;
+        if (!m || e.pointerId !== m.pointerId) return;
+        pjMarq = null;
+        if (!m.el) return; // a plain click: handled as a click
+        m.el.remove();
+        renderProject();
+        // the click that ends the box must not clear the selection
+        const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+        window.addEventListener('click', stop, { capture: true, once: true });
+        setTimeout(() => window.removeEventListener('click', stop, { capture: true }), 50);
+    };
+    document.addEventListener('pointerup', pjMarqEnd);
+    document.addEventListener('pointercancel', pjMarqEnd);
+
+    // Copy / Cut / Delete right above the selected items
+    var pjCtx;
+    function pjDeleteCards(ids) {
+        pjRecord();
+        const gone = new Set(ids);
+        pj.columns.forEach((c) => { c.cards = c.cards.filter((k) => !gone.has(k.id)); });
+        pj.sel = new Set();
+        renderProject();
+        pjSave();
+        toast(`${ids.length === 1 ? 'Item' : `${ids.length} items`} deleted (↶ to undo)`);
+    }
+    function updatePjCtx() {
+        if (!pjCtx) return;
+        if (!pjActive() || !pj.sel.size || pj.editing) { pjCtx.hide(); return; }
+        const ids = [...pj.sel];
+        pjCtx.show({
+            key: `${ids.join(',')}|${pjClip ? pjClip.cards.length : 0}`,
+            anchor: () => rectOf(ids.map((id) => pjCols.querySelector(`[data-card="${id}"]`))),
+            busy: () => !!pjDrag || !!(pjMarq && pjMarq.el),
+            after: updatePjCtx,
+            actions: () => {
+                const n = ids.length > 1 ? ` ${ids.length} items` : '';
+                const list = [
+                    { label: `Copy${n}`, icon: '⧉', run: () => pjCopyCards(ids, false, true) },
+                    { label: `Cut${n}`, icon: '✂', run: () => pjCopyCards(ids, true, true) }
+                ];
+                if (pjClip) list.push({ label: `Paste ${pjClip.cards.length === 1 ? 'item' : `${pjClip.cards.length} items`} below`, icon: '📋', run: () => pjPasteCards(pjClip.cards) });
+                list.push({ label: `Delete${n}`, icon: '🗑', danger: true, run: () => pjDeleteCards(ids) });
+                return list.map((a) => ({ ...a, text: a.label.split(' ')[0] }));
+            }
+        });
+    }
+
+    /* ---- copy / paste in the boxes on the right: dropdown options, dropdowns, tags, people ---- */
+    let pjSideClip = null; // { kind: 'option' | 'dept' | 'person' | 'select', items }
+    function pjSideCopy(kind, items) {
+        pjSideClip = { kind, items: JSON.parse(JSON.stringify(items)) };
+        const plain = items.map((x) => x.name).join('\n');
+        pjSideClip.plain = plain;
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(plain).catch(() => {});
+        const what = kind === 'option' ? 'option' : PJ_KIND_WORD[kind];
+        toast(`${items.length === 1 ? `"${items[0].name}"` : `${items.length} ${what}s`} copied`);
+    }
+    // new copies (new ids), so the same thing can be pasted more than once
+    const pjFreshCopy = (kind, x) => (kind === 'select'
+        ? { id: uid(), name: x.name, options: (x.options || []).map((o) => ({ id: uid(), name: o.name })) }
+        : kind === 'dept' ? { id: uid(), name: x.name, color: x.color || DEPT_COLORS[0] } : { id: uid(), name: x.name });
+    function pjSidePaste(where) {
+        const c = pjSideClip;
+        if (!c) return;
+        pjRecord();
+        if (where.fieldId) {
+            const f = pjField(where.fieldId);
+            if (!f) return;
+            const names = c.kind === 'option' ? c.items.map((x) => x.name) : c.kind === 'select' ? c.items.flatMap((x) => (x.options || []).map((o) => o.name)) : c.items.map((x) => x.name);
+            const at = where.afterOption ? (f.options || []).findIndex((o) => o.id === where.afterOption) + 1 : (f.options || []).length;
+            (f.options = f.options || []).splice(at, 0, ...names.map((name) => ({ id: uid(), name })));
+            pj.openFields.add(f.id);
+        } else {
+            const box = pj.boxes.find((b) => b.id === where.boxId);
+            if (!box) return;
+            const at = where.afterId ? box.items.findIndex((x) => x.id === where.afterId) + 1 : box.items.length;
+            const kind = box.kind;
+            box.items.splice(at, 0, ...c.items.map((x) => pjFreshCopy(kind, c.kind === kind ? x : { name: x.name })));
+        }
+        renderProject();
+        pjSave();
+    }
+    const pjClipLabel = () => (pjSideClip ? (pjSideClip.items.length === 1 ? `"${pjSideClip.items[0].name}"` : `${pjSideClip.items.length} ${pjSideClip.kind === 'option' ? 'options' : `${PJ_KIND_WORD[pjSideClip.kind]}s`}`) : '');
+    $('pjSide').addEventListener('contextmenu', (e) => {
+        if (!pjActive() || e.target.closest('input')) return;
+        const opt = e.target.closest('.pj-option');
+        const row = e.target.closest('.pj-side-item');
+        const boxEl = e.target.closest('.pj-box');
+        if (!opt && !row && !boxEl) return;
+        e.preventDefault();
+        const x = e.clientX, y = e.clientY;
+        if (opt) {
+            const fieldId = opt.closest('.pj-options').dataset.optionsOf;
+            const f = pjField(fieldId);
+            const o = f && (f.options || []).find((v) => v.id === opt.dataset.option);
+            if (!o) return;
+            const actions = [
+                { label: `Copy "${o.name}"`, icon: '⧉', run: () => pjSideCopy('option', [o]) },
+                { label: `Copy all options of ${f.name}`, icon: '⧉', run: () => pjSideCopy('option', f.options || []) }
+            ];
+            if (pjSideClip) actions.push({ label: `Paste ${pjClipLabel()} below`, icon: '📋', run: () => pjSidePaste({ fieldId, afterOption: o.id }) });
+            actions.push({ label: 'Rename', icon: '✎', run: () => pjRenameOption(fieldId, o.id) });
+            actions.push({ label: 'Delete', icon: '🗑', danger: true, run: () => pjRemoveOption(fieldId, o.id) });
+            menuAt(x, y, o.name, actions);
+            return;
+        }
+        if (row) {
+            const kind = row.dataset.dept ? 'dept' : row.dataset.person ? 'person' : 'select';
+            const id = row.dataset.dept || row.dataset.person || row.dataset.field;
+            const box = pjBoxOfItem(id);
+            const item = box && box.items.find((v) => v.id === id);
+            if (!item) return;
+            const actions = [{ label: `Copy "${item.name}"${kind === 'select' ? ' (with its options)' : ''}`, icon: '⧉', run: () => pjSideCopy(kind, [item]) }];
+            if (kind === 'select') actions.push({ label: 'Copy its options', icon: '⧉', run: () => pjSideCopy('option', item.options || []) });
+            if (pjSideClip && kind === 'select' && pjSideClip.kind !== 'select') actions.push({ label: `Paste ${pjClipLabel()} into ${item.name}`, icon: '📋', run: () => pjSidePaste({ fieldId: id }) });
+            if (pjSideClip && (pjSideClip.kind === kind || (kind !== 'select' && pjSideClip.kind !== 'select'))) actions.push({ label: `Paste ${pjClipLabel()} below`, icon: '📋', run: () => pjSidePaste({ boxId: box.id, afterId: id }) });
+            actions.push({ label: 'Rename', icon: '✎', run: () => pjRenameSide(kind, id) });
+            actions.push({ label: 'Delete', icon: '🗑', danger: true, run: () => pjRemoveSide(kind, id) });
+            menuAt(x, y, item.name, actions);
+            return;
+        }
+        const box = pj.boxes.find((b) => b.id === boxEl.dataset.box);
+        if (!box) return;
+        const actions = [{ label: `Copy everything in ${box.name}`, icon: '⧉', run: () => box.items.length && pjSideCopy(box.kind, box.items) }];
+        if (pjSideClip) actions.push({ label: `Paste ${pjClipLabel()} here`, icon: '📋', run: () => pjSidePaste({ boxId: box.id }) });
+        menuAt(x, y, box.name, actions);
+    });
+    // pasting several lines in a "+ Add" box adds one per line
+    $('pjSide').addEventListener('paste', (e) => {
+        const input = e.target.closest('form input');
+        if (!input || !pjActive()) return;
+        const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+        const form = input.closest('form');
+        const fromClip = pjSideClip && text.trim() === pjSideClip.plain.trim();
+        if (!fromClip && !/\n/.test(text.trim())) return; // one line: normal paste
+        e.preventDefault();
+        if (fromClip) {
+            if (form.classList.contains('pj-option-form')) pjSidePaste({ fieldId: form.dataset.field });
+            else pjSidePaste({ boxId: form.dataset.box });
+        } else {
+            const names = text.split(/\r?\n/).map((l) => l.trim().slice(0, 50)).filter(Boolean).slice(0, 200);
+            const keep = pjSideClip;
+            pjSideClip = { kind: 'option', items: names.map((name) => ({ name })), plain: '' };
+            if (form.classList.contains('pj-option-form')) pjSidePaste({ fieldId: form.dataset.field });
+            else pjSidePaste({ boxId: form.dataset.box });
+            pjSideClip = keep;
+        }
+        const again = $('pjSide').querySelector(form.classList.contains('pj-option-form') ? `.pj-option-form[data-field="${form.dataset.field}"] input` : `form[data-box="${form.dataset.box}"] input`);
+        if (again) again.focus();
+    });
+
     /* ---- copy / cut / paste items ---- */
     let pjClip = null; // { plain, cards } — the items copied last (with their tags, people and dropdowns)
     const pjCardsText = (cards) => cards.map((c) => (c.text || '').replace(/\n+/g, ' ').trim() || 'Untitled').join('\n');
     function pjCopyCards(ids, cut = false, toClipboard = false) {
         const cards = [];
         pj.columns.forEach((c) => c.cards.forEach((k) => { if (ids.includes(k.id)) cards.push(JSON.parse(JSON.stringify(k))); }));
-        if (!cards.length) { toast('Select items first (Shift + click), then copy'); return null; }
-        pjClip = { plain: pjCardsText(cards), cards };
+        if (!cards.length) { toast('Select items first (drag a box around them, or Shift + click), then copy'); return null; }
+        // their tags, people and dropdowns go along (so they also work in the project of another note)
+        const defs = [];
+        const addDef = (id, kind) => {
+            if (defs.some((d) => d.item.id === id)) return;
+            const box = pjBoxOfItem(id);
+            const item = box && box.items.find((x) => x.id === id);
+            if (item) defs.push({ kind, boxName: box.name, item: JSON.parse(JSON.stringify(item)) });
+        };
+        cards.forEach((c) => {
+            (c.depts || []).forEach((id) => addDef(id, 'dept'));
+            (c.people || []).forEach((id) => addDef(id, 'person'));
+            Object.keys(c.fields || {}).forEach((id) => addDef(id, 'select'));
+        });
+        pjClip = { plain: pjCardsText(cards), cards, defs };
         if (toClipboard && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(pjClip.plain).catch(() => {});
         if (cut) {
             pjRecord();
@@ -9855,7 +10050,19 @@ RemminStore.ready.then(() => {
         else if (where.colId) { const col = pjCol(where.colId); if (col) spot = { col, index: col.cards.length }; }
         if (!spot) spot = pjPasteSpot();
         if (!spot) return;
-        // only keep the tags / people / dropdowns this board has (items can come from another note)
+        pjRecord();
+        // the copied tags / people / dropdowns this board doesn't have yet are added to it
+        const defs = pjClip && cards === pjClip.cards ? pjClip.defs || [] : [];
+        defs.forEach((d) => {
+            const have = d.kind === 'dept' ? pjDept(d.item.id) : d.kind === 'person' ? pjPerson(d.item.id) : pjField(d.item.id);
+            if (have) {
+                if (d.kind === 'select') (d.item.options || []).forEach((o) => { if (!(have.options || []).some((x) => x.id === o.id)) (have.options = have.options || []).push({ ...o }); });
+                return;
+            }
+            let box = pj.boxes.find((b) => b.kind === d.kind && b.name === d.boxName) || pjBoxesOf(d.kind)[0];
+            if (!box) { box = { id: uid(), kind: d.kind, name: d.boxName || PJ_BOX_KINDS[d.kind][0], items: [] }; pj.boxes.push(box); }
+            box.items.push(JSON.parse(JSON.stringify(d.item)));
+        });
         const keep = (ids, has) => (ids || []).filter((x) => has(x));
         const fresh = cards.map((c) => {
             const k = { id: uid(), text: c.text || '' };
@@ -9867,7 +10074,6 @@ RemminStore.ready.then(() => {
             if (Object.keys(fields).length) k.fields = fields;
             return k;
         });
-        pjRecord();
         spot.col.cards.splice(spot.index, 0, ...fresh);
         pj.sel = new Set(fresh.map((k) => k.id));
         renderProject();
@@ -12499,6 +12705,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Project: drag a box with the mouse to select items, Copy / Cut / Delete show right above them; copied items take their tags, people and dropdowns along to another note; copy and paste dropdown options, tags and people (right-click, or paste several lines in a "+ Add" box)',
         'Project: copy, cut and paste items (Ctrl+C / Ctrl+X / Ctrl+V, the Copy / Paste buttons or right-click); pasting text from elsewhere makes one item per line',
         'Project: drag things in the boxes on the right (and the options of a dropdown) to change their order; Repeat on: hold the mouse button and slide over the days to select them',
         'Explorer: the ☰ button of a note is centred vertically',

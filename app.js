@@ -2862,6 +2862,7 @@ RemminStore.ready.then(() => {
         const items = [{ label: 'Copy video', icon: '⧉', run: () => copyVideo(src) }];
         if (isMediaRef(src)) {
             items.push({ label: 'Download video', icon: '⬇', run: () => downloadVideo(src) });
+            items.push(alarmSoundAction(src, 'Sound of a video', true));
             const data = mediaData(src);
             items.push({
                 label: `Compress video…${data ? ` (now ${mbOf(data).toFixed(1)} MB)` : ''}`, icon: '🗜',
@@ -5003,11 +5004,11 @@ RemminStore.ready.then(() => {
     }
     // chip: the chip on screen; o: { loop, setLoop, rename, remove }
     // this audio as the sound of the alarm of the open note (click again: the standard sound)
-    function alarmSoundAction(src, name) {
+    function alarmSoundAction(src, name, video = false) {
         const note = noteById(state.currentNoteId);
         const on = !!(note && src && note.alarmSound === src);
         return {
-            label: on ? 'Alarm sound of this note ✓ (click: standard sound again)' : 'Use as alarm sound of this note',
+            label: on ? 'Alarm sound of this note ✓ (click: standard sound again)' : video ? 'Use its sound as alarm sound of this note' : 'Use as alarm sound of this note',
             icon: '⏰',
             run: () => setNoteAlarmSound(note, on ? '' : src, name)
         };
@@ -12764,6 +12765,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Video: ⏰ "Use its sound as alarm sound of this note"',
         'Storage overview: why offline is bigger than GitHub, and a list of every file on GitHub with the notes that use it (or that it is no longer used)',
         'Audio: ⏰ "Use as alarm sound of this note" in its options; the Scheduled card shows which sound the alarm plays',
         'GitHub sync: fewer "error 500": a hiccup at GitHub is tried again, and only media files that really exist are removed; Project: Copy / Cut / Delete also above the item you edit (no more ✕ on items), clicking next to the items clears the selection',

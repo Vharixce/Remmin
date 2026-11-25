@@ -12764,6 +12764,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Storage overview: why offline is bigger than GitHub, and a list of every file on GitHub with the notes that use it (or that it is no longer used)',
         'Audio: ⏰ "Use as alarm sound of this note" in its options; the Scheduled card shows which sound the alarm plays',
         'GitHub sync: fewer "error 500": a hiccup at GitHub is tried again, and only media files that really exist are removed; Project: Copy / Cut / Delete also above the item you edit (no more ✕ on items), clicking next to the items clears the selection',
         'Project: drag a box with the mouse to select items, Copy / Cut / Delete show right above them; copied items take their tags, people and dropdowns along to another note; copy and paste dropdown options, tags and people (right-click, or paste several lines in a "+ Add" box)',
@@ -14534,7 +14535,7 @@ RemminStore.ready.then(() => {
             const quota = RemminStore.usingIndexedDB ? localQuota : 5 * 1024 * 1024;
             setMeter('meterLocal', true, RemminStore.bytes(), quota,
                 RemminStore.usingIndexedDB
-                    ? 'Remmin data saved offline on this device (IndexedDB), out of the space your browser allows'
+                    ? 'Remmin data saved offline on this device (IndexedDB), out of the space your browser allows. Pictures, videos and audio are saved as text here (about ⅓ bigger than on GitHub). Click for details.'
                     : 'Remmin data in local storage on this device (about 5 MB is allowed)');
         }, 300);
     }
@@ -14629,13 +14630,16 @@ RemminStore.ready.then(() => {
         const videosTotal = Object.values(state.media).reduce((t, v) => t + (v.startsWith('data:audio/') ? 0 : v.length), 0);
         const audioTotal = Object.values(state.media).reduce((t, v) => t + (v.startsWith('data:audio/') ? v.length : 0), 0);
         const trashTotal = JSON.stringify(state.trash || []).length;
+        const origTotal = (RemminStore.get(STORAGE.mediaOrig) || '').length + (RemminStore.get(IMG_ORIG_KEY) || '').length;
         const max = rows.length ? rows[0].total : 1;
         $('storageSummary').innerHTML = `
             <div class="so-row-sum"><span>Notes (without pictures / videos)</span><b>${fmtSize(notesTotal)}</b></div>
             <div class="so-row-sum"><span>Pictures</span><b>${fmtSize(picturesTotal)}</b></div>
             <div class="so-row-sum"><span>Videos (each stored once)</span><b>${fmtSize(videosTotal)}</b></div>
             <div class="so-row-sum"><span>Audio (each stored once)</span><b>${fmtSize(audioTotal)}</b></div>
-            <div class="so-row-sum"><span>Trash</span><b>${fmtSize(trashTotal)}</b></div>`;
+            <div class="so-row-sum"><span>Trash</span><b>${fmtSize(trashTotal)}</b></div>
+            ${origTotal ? `<div class="so-row-sum"><span>Originals of compressed files (only on this device, 7 days)</span><b>${fmtSize(origTotal)}</b></div>` : ''}
+            <div class="so-note">On this device pictures, videos and audio are saved as text (base64), which is about ⅓ bigger than the same files on GitHub${origTotal ? '; the originals of compressed files are also only kept here' : ''}. So "Offline" is bigger than "GitHub" for the same notes.</div>`;
         $('storageList').innerHTML = rows.length ? rows.map((r, i) => {
             const shared = [...r.ids].filter((id) => (users.get(id) || 0) > 1).length;
             const bits = [...Object.entries(r.parts), ['Videos', r.videos - r.parts.Audio]].filter(([, v]) => v >= 1024)
@@ -14650,6 +14654,35 @@ RemminStore.ready.then(() => {
                 <span class="so-size">${fmtSize(r.total)}</span>
             </button>`;
         }).join('') : '<div class="so-empty">No notes yet</div>';
+        $('storageList').insertAdjacentHTML('beforeend', githubFilesHtml());
+    }
+    // every file in remmin-media/ on GitHub, with the notes that use it
+    function githubFilesHtml() {
+        const remote = githubConfigured() && githubConfig.remoteMediaIndex ? githubConfig.remoteMediaIndex : null;
+        if (!remote || !Object.keys(remote).length) return '';
+        // the ids a note uses: videos / audio (media:…) and pictures (their file name is a hash of the picture)
+        const idsOf = (obj) => {
+            const text = JSON.stringify(obj);
+            const ids = new Set([...text.matchAll(/media:([a-z0-9]{4,40})/g)].map((m) => m[1]));
+            const pics = {};
+            picsOut(text, pics);
+            Object.keys(pics).forEach((id) => ids.add(id));
+            return ids;
+        };
+        const usedBy = new Map();
+        const add = (id, who) => { if (remote[id]) { if (!usedBy.has(id)) usedBy.set(id, new Set()); usedBy.get(id).add(who); } };
+        state.notes.forEach((n) => idsOf(n).forEach((id) => add(id, markTitle(n, n.title) || 'Untitled')));
+        (state.trash || []).forEach((t) => { if (t && t.note) idsOf(t.note).forEach((id) => add(id, `🗑 ${t.note.title || 'Untitled'} (in the Trash)`)); });
+        const files = Object.entries(remote).map(([id, info]) => ({ id, info: info || {}, users: [...(usedBy.get(id) || [])] }))
+            .sort((a, b) => (a.users.length ? 1 : 0) - (b.users.length ? 1 : 0) || (b.info.len || 0) - (a.info.len || 0));
+        const total = files.reduce((t, f) => t + Math.round((f.info.len || 0) * 0.75), 0);
+        return `<div class="so-gh-head">Files on GitHub (remmin-media) · ${files.length} · ${fmtSize(total)}</div>` + files.map((f) => {
+            const mime = f.info.mime || '';
+            const kind = mime.startsWith('image/') ? '🖼 Picture' : mime.startsWith('audio/') ? '🎵 Audio' : '🎬 Video';
+            const who = f.users.length ? `Used in: ${escapeHtml(f.users.join(', '))}`
+                : '<span class="so-unused">No note uses it any more: it is removed from GitHub at the next sync</span>';
+            return `<div class="so-gh-file"><span class="so-gh-kind">${kind}</span><span class="so-gh-who">${who}</span><span class="so-size">${fmtSize(Math.round((f.info.len || 0) * 0.75))}</span></div>`;
+        }).join('');
     }
     $('storageMeters').addEventListener('click', async () => {
         if (!privatePass) {

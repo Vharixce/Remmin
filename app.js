@@ -9032,7 +9032,6 @@ RemminStore.ready.then(() => {
                                 <button type="button" class="pj-done" title="Save this item (Enter)">Done</button>
                             </span>
                         </div>
-                        <button type="button" class="pj-card-del" title="Delete item" aria-label="Delete item">✕</button>
                     </div>`;
     }
 
@@ -9538,6 +9537,7 @@ RemminStore.ready.then(() => {
             renderProject();
         };
         pj.editFinish = finish;
+        updatePjCtx();
         box.addEventListener('keydown', (e) => {
             e.stopPropagation();
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
@@ -9628,7 +9628,11 @@ RemminStore.ready.then(() => {
             return;
         }
         const colEl = t.closest('.pj-col');
-        if (!colEl) return;
+        if (!colEl) {
+            // a click next to the items: no selection any more
+            if (pj.sel.size && !t.closest('button, input, textarea, select, .ctx-bar, .pj-side')) { pj.sel = new Set(); renderProject(); }
+            return;
+        }
         const colId = colEl.dataset.col;
         if (t.closest('.pj-add-card')) { pjAddCard(colId); return; }
         if (t.closest('.pj-col-menu')) {
@@ -9878,6 +9882,23 @@ RemminStore.ready.then(() => {
     }
     function updatePjCtx() {
         if (!pjCtx) return;
+        // the item being edited: Copy / Cut / Delete above it too
+        if (pjActive() && pj.editing && pj.editing.kind === 'card' && pjFindCard(pj.editing.id)) {
+            const id = pj.editing.id;
+            const done = () => { if (pj.editing && pj.editFinish) pj.editFinish(true); };
+            pjCtx.show({
+                key: `edit:${id}`,
+                anchor: () => rectOf([pjCols.querySelector(`[data-card="${id}"]`)]),
+                busy: () => !!pjDrag,
+                after: updatePjCtx,
+                actions: () => [
+                    { label: 'Copy', text: 'Copy', icon: '⧉', run: () => { done(); pjCopyCards([id], false, true); } },
+                    { label: 'Cut', text: 'Cut', icon: '✂', run: () => { done(); pjCopyCards([id], true, true); } },
+                    { label: 'Delete', text: 'Delete', icon: '🗑', danger: true, run: () => { done(); if (pjFindCard(id)) pjDeleteCards([id]); } }
+                ]
+            });
+            return;
+        }
         if (!pjActive() || !pj.sel.size || pj.editing) { pjCtx.hide(); return; }
         const ids = [...pj.sel];
         pjCtx.show({
@@ -12705,6 +12726,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'GitHub sync: fewer "error 500": a hiccup at GitHub is tried again, and only media files that really exist are removed; Project: Copy / Cut / Delete also above the item you edit (no more ✕ on items), clicking next to the items clears the selection',
         'Project: drag a box with the mouse to select items, Copy / Cut / Delete show right above them; copied items take their tags, people and dropdowns along to another note; copy and paste dropdown options, tags and people (right-click, or paste several lines in a "+ Add" box)',
         'Project: copy, cut and paste items (Ctrl+C / Ctrl+X / Ctrl+V, the Copy / Paste buttons or right-click); pasting text from elsewhere makes one item per line',
         'Project: drag things in the boxes on the right (and the options of a dropdown) to change their order; Repeat on: hold the mouse button and slide over the days to select them',
@@ -12940,7 +12962,23 @@ RemminStore.ready.then(() => {
         return `https://api.github.com/repos/${encodeURIComponent(githubConfig.owner)}/${encodeURIComponent(githubConfig.repo)}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
     }
 
+    // GitHub sometimes answers 500 / 502 / 503 / 504 (or the connection drops): wait a moment and try again
     async function githubRequest(method, body, url = githubUrl(), accept = 'application/vnd.github+json') {
+        const waits = [800, 2500, 6000];
+        for (let attempt = 0; ; attempt++) {
+            try {
+                return await githubRequestOnce(method, body, url, accept);
+            } catch (err) {
+                const retry = (err.status >= 500 && err.status <= 504) || (err instanceof TypeError && !err.status);
+                if (!retry || attempt >= waits.length) {
+                    if (err.status >= 500) err.message = `GitHub is having trouble right now (error ${err.status}), Remmin tries again at the next sync`;
+                    throw err;
+                }
+                await new Promise((r) => setTimeout(r, waits[attempt]));
+            }
+        }
+    }
+    async function githubRequestOnce(method, body, url, accept) {
         const response = await fetch(url, {
             method,
             // never use a cached copy: we must always see the newest version on GitHub
@@ -13347,8 +13385,11 @@ RemminStore.ready.then(() => {
         const dir = ghMediaDir();
         const tree = [{ path: githubConfig.path, mode: '100644', type: 'blob', sha: jsonBlob.sha }];
         fresh.forEach((id) => tree.push({ path: `${dir}/${id}`, mode: '100644', type: 'blob', sha: index[id].sha }));
-        Object.keys(prevIndex).forEach((id) => { if (!index[id]) tree.push({ path: `${dir}/${id}`, mode: '100644', type: 'blob', sha: null }); });
         const baseCommit = await githubRequest('GET', null, ghRepoUrl(`/git/commits/${parent}`));
+        // remove only media files that really are there (removing a missing file makes GitHub refuse the whole sync)
+        const existing = await ghMediaFiles(baseCommit.tree.sha);
+        const stillUsed = new Set([...bodyText.matchAll(PIC_TOKEN_RE)].map((m) => m[1]));
+        existing.forEach((sha, name) => { if (!index[name] && !fresh.includes(name) && !stillUsed.has(name)) tree.push({ path: `${dir}/${name}`, mode: '100644', type: 'blob', sha: null }); });
         const newTree = await githubRequest('POST', { base_tree: baseCommit.tree.sha, tree }, ghRepoUrl('/git/trees'));
         const commit = await githubRequest('POST', { message: `Remmin sync ${new Date().toISOString()}`, tree: newTree.sha, parents: [parent] }, ghRepoUrl('/git/commits'));
         try {
@@ -13365,6 +13406,21 @@ RemminStore.ready.then(() => {
         githubConfig.pushedSha = commit.sha;
         githubConfig.pushedUpdatedAt = payload.updatedAt;
         delete githubConfig.legacyPath; // remmin.json exists now
+    }
+
+    // the files in remmin-media/ of a commit's tree: name → sha
+    async function ghMediaFiles(treeSha) {
+        const files = new Map();
+        let sha = treeSha;
+        for (const part of ghMediaDir().split('/')) {
+            const t = await githubRequest('GET', null, ghRepoUrl(`/git/trees/${sha}`));
+            const entry = t && (t.tree || []).find((x) => x.path === part && x.type === 'tree');
+            if (!entry) return files;
+            sha = entry.sha;
+        }
+        const t = await githubRequest('GET', null, ghRepoUrl(`/git/trees/${sha}`));
+        ((t && t.tree) || []).forEach((x) => { if (x.type === 'blob') files.set(x.path, x.sha); });
+        return files;
     }
 
     // only for an empty repo (the very first file)

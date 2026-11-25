@@ -2500,3 +2500,8 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .pj-columns { user-select: none; -webkit-user-select: none; }
 .pj-columns textarea, .pj-columns input { user-select: text; -webkit-user-select: text; }
 .pj-bar #pjPaste { white-space: nowrap; width: auto; padding: 0 10px; flex: none; }
+.alarm-sound { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 4px 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: rgba(124, 111, 240, .12); cursor: pointer; max-width: 220px; }
+.alarm-sound[hidden] { display: none; }
+.alarm-sound-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alarm-sound-del { background: none; border: 0; color: var(--text-dim); cursor: pointer; font-size: 10px; padding: 0 3px; }
+.alarm-sound-del:hover { color: #ef4444; }

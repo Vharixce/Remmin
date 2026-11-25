@@ -5002,6 +5002,27 @@ RemminStore.ready.then(() => {
         document.body.appendChild(a); a.click(); a.remove();
     }
     // chip: the chip on screen; o: { loop, setLoop, rename, remove }
+    // this audio as the sound of the alarm of the open note (click again: the standard sound)
+    function alarmSoundAction(src, name) {
+        const note = noteById(state.currentNoteId);
+        const on = !!(note && src && note.alarmSound === src);
+        return {
+            label: on ? 'Alarm sound of this note ✓ (click: standard sound again)' : 'Use as alarm sound of this note',
+            icon: '⏰',
+            run: () => setNoteAlarmSound(note, on ? '' : src, name)
+        };
+    }
+    function setNoteAlarmSound(note, src, name) {
+        if (!note) return;
+        if (src) { note.alarmSound = src; note.alarmSoundName = (name || 'Audio').slice(0, 80); } else { delete note.alarmSound; delete note.alarmSoundName; }
+        touch(note);
+        saveNotes();
+        if (note.id === state.currentNoteId) updateScheduleUi(note);
+        if (!src) { toast('The alarm of this note plays the standard sound again'); return; }
+        toast(!note.scheduledAt ? `⏰ "${note.alarmSoundName}" will be the alarm sound: give the note a date and turn on Alarm (in Scheduled)`
+            : !note.alarmEnabled ? `⏰ "${note.alarmSoundName}" will be the alarm sound: turn on Alarm in Scheduled`
+                : `⏰ The alarm of this note now plays "${note.alarmSoundName}"`);
+    }
     function audioMenuActions(chip, o) {
         const playing = voicePlayingChip === chip && voiceAudio && !voiceAudio.paused;
         const a = { src: chip.getAttribute('data-voice'), name: chip.getAttribute('data-name'), duration: Number(chip.getAttribute('data-duration')) || 0, loop: o.loop, vol: chipVolume(chip) };
@@ -5010,6 +5031,7 @@ RemminStore.ready.then(() => {
             { label: o.loop ? 'Loop off' : 'Loop on (play again and again)', icon: '🔁', run: o.setLoop },
             { label: 'Copy audio', icon: '⧉', run: () => copyAudio(a) },
             { label: 'Download audio', icon: '⬇', run: () => downloadAudio(a.src, a.name) },
+            alarmSoundAction(a.src, a.name),
             ...audioCompressActions(a.src, o.x, o.y),
             { label: 'Rename', icon: '✎', run: o.rename },
             { label: 'Remove audio', icon: '🗑', danger: true, run: o.remove }
@@ -5387,6 +5409,7 @@ RemminStore.ready.then(() => {
         $('scheduleTime').value = d
             ? `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` : '';
         $('alarmEnabled').checked = note.alarmEnabled;
+        updateAlarmSoundLabel(note);
         $('emailEnabled').disabled = false;
         $('emailEnabled').checked = note.emailEnabled;
         $('emailToLabel').textContent = note.emailEnabled && note.emailTo ? `→ ${note.emailTo}` : '';
@@ -5601,6 +5624,21 @@ RemminStore.ready.then(() => {
     $('scheduleDate').addEventListener('change', scheduleChanged);
     $('scheduleTime').addEventListener('change', scheduleChanged);
     $('alarmEnabled').addEventListener('change', scheduleChanged);
+    function updateAlarmSoundLabel(note) {
+        const el = $('edAlarmSound');
+        if (!el) return;
+        const has = !!(note && note.alarmSound && (!isMediaRef(note.alarmSound) || mediaData(note.alarmSound)));
+        el.hidden = !has;
+        if (has) el.querySelector('.alarm-sound-name').textContent = `🎵 ${note.alarmSoundName || 'Audio'}`;
+    }
+    $('edAlarmSound').addEventListener('click', (e) => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        if (e.target.closest('.alarm-sound-del')) { setNoteAlarmSound(note, '', ''); return; }
+        // listen to it
+        const data = isMediaRef(note.alarmSound) ? mediaData(note.alarmSound) : note.alarmSound;
+        if (data) { const a = new Audio(data); a.play().catch(() => {}); setTimeout(() => a.pause(), 6000); }
+    });
 
     /* ---- email notification (sent by the GitHub Action, see EMAIL-SETUP.md) ---- */
     const EMAIL_KEY = 'remmin.emailAddress.v1';
@@ -12726,6 +12764,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Audio: ⏰ "Use as alarm sound of this note" in its options; the Scheduled card shows which sound the alarm plays',
         'GitHub sync: fewer "error 500": a hiccup at GitHub is tried again, and only media files that really exist are removed; Project: Copy / Cut / Delete also above the item you edit (no more ✕ on items), clicking next to the items clears the selection',
         'Project: drag a box with the mouse to select items, Copy / Cut / Delete show right above them; copied items take their tags, people and dropdowns along to another note; copy and paste dropdown options, tags and people (right-click, or paste several lines in a "+ Add" box)',
         'Project: copy, cut and paste items (Ctrl+C / Ctrl+X / Ctrl+V, the Copy / Paste buttons or right-click); pasting text from elsewhere makes one item per line',
@@ -13988,7 +14027,7 @@ RemminStore.ready.then(() => {
         const title = note.title.trim() || 'Untitled';
         const body = note.private ? 'Private note' : (note.content.trim().slice(0, 120) || 'Scheduled note');
         notify(`⏰ ${title}`, body, 'remmin-alarm-' + note.id);
-        playAlarmSound();
+        playAlarmSound(note);
         const snooze = Math.max(1, Number(note.alarmSnoozeMinutes) || 5);
         const runtimeFor = () => {
             state.alarms = readJSON(STORAGE.alarms, {}) || {};
@@ -14071,10 +14110,15 @@ RemminStore.ready.then(() => {
     ];
     const ALARM_TUNE_LENGTH = 2.6; // seconds, including the pause after the tune
 
-    function playAlarmSound() {
+    function playAlarmSound(note) {
         stopAlarmSound();
         alarmStopTimer = setTimeout(stopAlarmSound, ALARM_MAX_SOUND_MS);
-        const saved = RemminStore.get('remmin.alarmSound.v1');
+        let saved = RemminStore.get('remmin.alarmSound.v1');
+        // a note can have its own alarm sound (one of its audio files)
+        if (note && note.alarmSound) {
+            const own = isMediaRef(note.alarmSound) ? mediaData(note.alarmSound) : note.alarmSound;
+            if (own) saved = own;
+        }
         if (saved) {
             alarmAudio = new Audio(saved);
             alarmAudio.loop = true;

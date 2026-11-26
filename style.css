@@ -2518,3 +2518,5 @@ body.pj-tag-dragging, body.pj-tag-dragging * { cursor: grabbing !important; user
 .alarm-sound-row label.btn { cursor: pointer; }
 .alarm-sound-default { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .alarm-sound-default-status { font-size: 13px; color: var(--text-dim); margin-right: auto; }
+.pj-card-text a, .cb-text a { color: #93c5fd; text-decoration: underline; text-underline-offset: 2px; word-break: break-all; cursor: pointer; }
+.pj-card-text a:hover, .cb-text a:hover { color: #bfdbfe; }

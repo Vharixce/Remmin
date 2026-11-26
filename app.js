@@ -3019,6 +3019,22 @@ RemminStore.ready.then(() => {
         });
     }
 
+    // plain text → safe HTML with clickable web addresses (Project items)
+    function linkifyText(text) {
+        const src = String(text || '');
+        let out = '', last = 0, m;
+        const re = new RegExp(URL_RE.source, 'gi');
+        while ((m = re.exec(src))) {
+            const url = trimUrl(m[0]);
+            if (!url) continue;
+            const href = /^www\./i.test(url) ? `https://${url}` : url;
+            out += `${escapeHtml(src.slice(last, m.index))}<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(href)}">${escapeHtml(url)}</a>`;
+            last = m.index + url.length;
+            re.lastIndex = last;
+        }
+        return out + escapeHtml(src.slice(last));
+    }
+
     function textToHtml(text) {
         return escapeHtml(text || '').replace(/\n/g, '<br>');
     }
@@ -3704,6 +3720,15 @@ RemminStore.ready.then(() => {
     // which used to add a second copy. Remember the picture and just move it instead.
     let movingNoteImg = null;
     editorEl.addEventListener('dragstart', (e) => {
+        const link = e.target && e.target.closest && e.target.closest('a[href]');
+        if (link && link.getAttribute('draggable') === 'true' && editorEl.contains(link)) {
+            movingNoteLink = link;
+            const href = link.getAttribute('href');
+            e.dataTransfer.effectAllowed = 'copyLink';
+            e.dataTransfer.setData('text/uri-list', href);
+            e.dataTransfer.setData('text/plain', href);
+            return;
+        }
         const video = e.target && e.target.closest && e.target.closest('.video-embed');
         if (video && editorEl.contains(video)) {
             movingNoteVideo = video;
@@ -3715,12 +3740,14 @@ RemminStore.ready.then(() => {
         movingNoteImg = img && editorEl.contains(img) ? img : null;
     });
     editorEl.addEventListener('dragend', () => {
+        if (movingNoteLink) { movingNoteLink.removeAttribute('draggable'); movingNoteLink.removeAttribute('contenteditable'); movingNoteLink = null; }
         if (movingNoteVideo) { movingNoteVideo.draggable = false; videoMovedAt = Date.now(); }
         movingNoteImg = null; movingNoteVideo = null; hideDropOutline();
     });
 
     editorEl.addEventListener('drop', (e) => {
         if (draggingAppItem()) { e.preventDefault(); return; }
+        if (movingNoteLink) { e.preventDefault(); movingNoteLink = null; return; } // a link dropped back in the text: nothing changes
         if (movingNoteVideo) {
             const video = movingNoteVideo;
             movingNoteVideo = null;
@@ -4714,6 +4741,17 @@ RemminStore.ready.then(() => {
     editorEl.addEventListener('mousedown', (e) => {
         if (e.target.closest('.voice-chip') && !e.target.closest('.voice-vol, .voice-seek')) e.preventDefault();
     });
+    // a link can be dragged to another browser window / tab (in a text you type in, that only works when it is draggable)
+    editorEl.addEventListener('pointerover', (e) => {
+        const link = e.pointerType === 'mouse' && e.target.closest && e.target.closest('a[href]');
+        if (link && editorEl.contains(link) && !link.hasAttribute('draggable') && SAFE_LINK_RE.test(link.getAttribute('href'))) {
+            link.setAttribute('draggable', 'true');
+            link.contentEditable = 'false';
+            const off = () => { link.removeAttribute('draggable'); link.removeAttribute('contenteditable'); };
+            link.addEventListener('pointerleave', () => { if (movingNoteLink !== link) off(); else link.addEventListener('dragend', off, { once: true }); }, { once: true });
+        }
+    });
+    let movingNoteLink = null;
     // the volume slider of an audio chip (Text and Collage)
     function chipVolumeInput(slider, done) {
         const chip = slider.closest('.voice-chip');
@@ -9070,7 +9108,7 @@ RemminStore.ready.then(() => {
         return `
                     <div class="pj-card${depts.length ? ' has-edge' : ''}${pj.sel.has(card.id) ? ' selected' : ''}" data-card="${card.id}">${edge}
                         <span class="pj-grip" title="Drag to move" aria-hidden="true">⠿</span>
-                        <div class="pj-card-text">${card.text ? escapeHtml(card.text) : '<span class="pj-untitled">Untitled</span>'}</div>${fieldsHtml}
+                        <div class="pj-card-text">${card.text ? linkifyText(card.text) : '<span class="pj-untitled">Untitled</span>'}</div>${fieldsHtml}
                         <div class="pj-card-foot">
                             ${depts.map((d) => `<span class="pj-chip" style="background:${escapeHtml(d.color)};color:${textOn(d.color)}">${escapeHtml(d.name)}</span>`).join('')}
                             ${people.map((p) => `<span class="pj-avatar" title="${escapeHtml(p.name)}">${escapeHtml(initials(p.name))}</span>`).join('')}
@@ -9660,6 +9698,8 @@ RemminStore.ready.then(() => {
     pjBoard.addEventListener('click', (e) => {
         if (!pjActive() || pjDrag) return;
         const t = e.target;
+        // a link in an item: the browser opens it (in a new tab), the item is not edited
+        if (t.closest('.pj-card:not(.editing) a[href]')) { if (!SAFE_LINK_RE.test(t.closest('a').getAttribute('href'))) e.preventDefault(); return; }
         if (t.closest('#pjUndo')) { pjUndoRedo(true); return; }
         if (t.closest('#pjRedo')) { pjUndoRedo(false); return; }
         if (t.closest('#pjPaste')) { pjPasteButton(); return; }
@@ -9815,7 +9855,7 @@ RemminStore.ready.then(() => {
     pjBoard.addEventListener('pointerdown', (e) => {
         if (!pjActive() || e.button !== 0) return;
         const card = e.target.closest('.pj-card');
-        if (!card || card.classList.contains('editing') || e.target.closest('.pj-card-del, .pj-assign, .pj-field')) return;
+        if (!card || card.classList.contains('editing') || e.target.closest('.pj-card-del, .pj-assign, .pj-field, a[href]')) return; // a link: click opens it, drag takes it to another window
         const grip = e.target.closest('.pj-grip');
         if (e.shiftKey && !grip) return; // Shift + click selects
         if (e.pointerType !== 'mouse' && !grip) return; // on a touch screen the card itself scrolls / opens
@@ -10703,6 +10743,16 @@ RemminStore.ready.then(() => {
         if (save) cbSave();
         cbRender();
     }
+    cbBoard.addEventListener('click', (e) => {
+        const link = e.target.closest && e.target.closest('.cb-item a[href]');
+        if (!link) return;
+        if (link.closest('.cb-editing')) {
+            // typing in it: a click opens the link too (select text to edit it)
+            if (window.getSelection().toString()) return;
+            e.preventDefault();
+            if (SAFE_LINK_RE.test(link.getAttribute('href'))) window.open(link.getAttribute('href'), '_blank', 'noopener');
+        } else if (!SAFE_LINK_RE.test(link.getAttribute('href'))) e.preventDefault();
+    });
     // focus left the text (and not to the toolbar): stop editing
     cbBoard.addEventListener('focusout', (e) => {
         if (!cb.editing) return;
@@ -10986,6 +11036,9 @@ RemminStore.ready.then(() => {
 
     cbBoard.addEventListener('pointerdown', (e) => {
         if (!cbActive()) return;
+        // a link in a sticky note / text: a click opens it, dragging it takes it to another browser window
+        const linkHit = e.button === 0 && !e.shiftKey && e.target.closest && e.target.closest('.cb-item a[href]');
+        if (linkHit && cb.tool === 'select' && !cbSpace && !(cb.editing && linkHit.closest('.cb-editing'))) return;
         // the volume slider of an audio item: just the slider (no moving of the item)
         if (e.target.closest && e.target.closest('.cb-chip .voice-vol, .cb-chip .voice-seek')) { e.stopPropagation(); return; }
         // the play / loop buttons of an audio item
@@ -12775,6 +12828,7 @@ RemminStore.ready.then(() => {
     // which version of Remmin wrote the sync file (an older version must not overwrite a newer one)
     const APP_BUILD = '2026-11-23.1';
     const PATCH_HISTORY = [
+        'Links: click a link to open it in Collage (sticky notes, texts) and Project items too; drag a link to another browser window or tab',
         'Alarm sound in one place: the button next to Alarm shows the sound, click it to change / test it, ✕ for the standard sound',
         'Video: ⏰ "Use its sound as alarm sound of this note"',
         'Storage overview: why offline is bigger than GitHub, and a list of every file on GitHub with the notes that use it (or that it is no longer used)',

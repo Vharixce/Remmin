@@ -10561,6 +10561,20 @@ RemminStore.ready.then(() => {
         const n = cb.items.filter((i) => i.type === 'frame').length + 1;
         return cbAdd({ type: 'frame', x, y, w, h, color: cbColorPref('frame'), title: `Frame ${n}` });
     }
+    // "Frame" with things selected: put a frame around them right away
+    function cbFrameSelection() {
+        if (!cb.sel.size) return false;
+        cbEndEdit(true);
+        const b = cbBounds(cb.items.filter((it) => cbExpanded(cb.sel).has(it.id)));
+        if (!b) return false;
+        const pad = 32;
+        cbRecord();
+        cbNewFrame(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+        cb.tool = 'select';
+        cbRender();
+        cbSave();
+        return true;
+    }
     function cbAddAudio(a, at) {
         const note = noteById(cb.noteId);
         if (!note || isPrivateLocked(note) || !a || !isVoiceSrc(a.src || '')) return;
@@ -10843,7 +10857,11 @@ RemminStore.ready.then(() => {
     $('collageToolbar').addEventListener('click', (e) => {
         if (!noteById(cb.noteId) || isPrivateLocked(noteById(cb.noteId))) return;
         const tool = e.target.closest('[data-cb-tool]');
-        if (tool) { cbSetTool(tool.dataset.cbTool); return; }
+        if (tool) {
+            if (tool.dataset.cbTool === 'frame' && cbFrameSelection()) return;
+            cbSetTool(tool.dataset.cbTool);
+            return;
+        }
         const cmd = e.target.closest('[data-cb-cmd]');
         if (cmd) { cbFormat(() => document.execCommand(cmd.dataset.cbCmd, false, null)); return; }
         const tc = e.target.closest('[data-cb-text-color]');
@@ -11416,7 +11434,11 @@ RemminStore.ready.then(() => {
         if (mod && e.key === '-') { e.preventDefault(); cbZoomAt(cbBoard.clientWidth / 2, cbBoard.clientHeight / 2, 0.8); return; }
         if (mod || e.altKey) return;
         const tools = { v: 'select', h: 'hand', n: 'sticky', t: 'text', f: 'frame', a: 'arrow', l: 'arrow' };
-        if (tools[k]) { e.preventDefault(); cbSetTool(tools[k]); }
+        if (tools[k]) {
+            e.preventDefault();
+            if (k === 'f' && cbFrameSelection()) return;
+            cbSetTool(tools[k]);
+        }
     });
     document.addEventListener('keyup', (e) => { if (e.key === ' ') cbSpace = false; });
     window.addEventListener('blur', () => { cbSpace = false; });

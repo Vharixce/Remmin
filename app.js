@@ -14096,6 +14096,17 @@ RemminStore.ready.then(() => {
         notify(`⏰ ${title}`, body, 'remmin-alarm-' + note.id);
         playAlarmSound(note);
         const snooze = Math.max(1, Number(note.alarmSnoozeMinutes) || 5);
+        // "snooze for [X ▾]": defaults to the note's snooze setting, can be changed right here
+        const choices = [180, 60, 45, 30, 15, 10, 5];
+        if (!choices.includes(snooze)) { choices.push(snooze); choices.sort((a, b) => b - a); }
+        const snoozeLabel = (m) => m >= 60 && m % 60 === 0 ? `${m / 60}h` : `${m}m`;
+        const snoozeBox = document.createElement('label');
+        snoozeBox.className = 'toast-snooze';
+        snoozeBox.append('snooze for ');
+        const snoozeSelect = document.createElement('select');
+        snoozeSelect.className = 'toast-snooze-select';
+        choices.forEach((m) => snoozeSelect.add(new Option(snoozeLabel(m), String(m), false, m === snooze)));
+        snoozeBox.appendChild(snoozeSelect);
         const runtimeFor = () => {
             state.alarms = readJSON(STORAGE.alarms, {}) || {};
             const r = state.alarms[note.id];
@@ -14104,20 +14115,22 @@ RemminStore.ready.then(() => {
         toast(`⏰ ${title} – ${formatTime(toLocalIso(new Date(dueTime)))}${ring > 1 ? ` (${ring}×)` : ''}${lastRing ? ' · last reminder' : ''}`, {
             persistent: true,
             key: 'alarm-' + note.id,
+            extra: snoozeBox,
             buttons: [
                 {
-                    label: `Snooze ${snooze} min`,
+                    label: 'Snooze',
                     secondary: true,
                     onClick: () => {
                         stopAlarmSound();
                         const r = runtimeFor();
-                        const until = Date.now() + snooze * 60000;
+                        const minutes = Number(snoozeSelect.value) || snooze;
+                        const until = Date.now() + minutes * 60000;
                         if (r) { r.nextAt = until; saveAlarms(); }
                         toast(`Snoozed until ${formatTime(toLocalIso(new Date(until)))}`);
                     }
                 },
                 {
-                    label: 'Stop alarm',
+                    label: 'Stop',
                     onClick: () => {
                         stopAlarmSound();
                         const r = runtimeFor();
@@ -14320,6 +14333,7 @@ RemminStore.ready.then(() => {
         const text = document.createElement('span');
         text.textContent = message;
         el.appendChild(text);
+        if (action?.extra) el.appendChild(action.extra);
 
         const buttons = action ? (action.buttons || [{ label: action.label, onClick: action.onClick }]) : [];
         buttons.forEach((b) => {

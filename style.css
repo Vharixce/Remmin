@@ -1663,6 +1663,9 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .toast-action.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
 .toast-action.secondary:hover { border-color: var(--primary); }
 .toast .toast-action + .toast-action { margin-left: 6px; }
+.toast-snooze { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--text-dim); }
+.toast-snooze-select { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; font-size: 12px; cursor: pointer; }
+.toast-snooze-select:focus { outline: none; border-color: var(--primary); }
 
 /* ---------- "How to setup: Google Apps Script Emails" ---------- */
 .email-help-btn { width: 100%; text-align: center; }
